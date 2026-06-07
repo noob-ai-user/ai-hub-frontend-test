@@ -26,6 +26,23 @@ HUB_API_PID=$!
 echo "[hub] booting frontend: ${ACTIVE}" >&2
 /opt/hub/docker/switch-app.sh "${ACTIVE}" 2>&1 || echo "[hub] warn: switch-app" >&2
 
+# Wait for backend before nginx (avoids 502 on cold start)
+case "${ACTIVE}" in
+  sillytavern) BACKEND_PORT="${ST_PORT:-8000}" ;;
+  lumiverse)   BACKEND_PORT="${LUMIVERSE_PORT:-7861}" ;;
+  marinara)    BACKEND_PORT="${MARINARA_PORT:-7862}" ;;
+  *)           BACKEND_PORT="${ST_PORT:-8000}" ;;
+esac
+echo "[hub] waiting for backend :${BACKEND_PORT}" >&2
+for _ in $(seq 1 45); do
+  if curl -fsS -o /dev/null "http://127.0.0.1:${BACKEND_PORT}/" 2>/dev/null \
+     || curl -fsS -o /dev/null "http://127.0.0.1:${BACKEND_PORT}/api/health" 2>/dev/null; then
+    echo "[hub] backend ready on :${BACKEND_PORT}" >&2
+    break
+  fi
+  sleep 1
+done
+
 (while true; do sleep 300; /opt/hub/scripts/sync-shared-data.sh || true; done) >&2 &
 
 echo "[hub] nginx on :${HUB_PORT:-7860}" >&2
