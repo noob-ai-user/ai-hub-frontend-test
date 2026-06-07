@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Frontends Hub</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f1117;
+      --card: #1a1f2e;
+      --accent: #ff6b4a;
+      --accent2: #4ecdc4;
+      --text: #e8ecf4;
+      --muted: #8b95a8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: radial-gradient(ellipse at top, #1b2236, var(--bg));
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+    main {
+      width: min(720px, 100%);
+    }
+    h1 { margin: 0 0 0.5rem; font-size: 1.8rem; }
+    p.lead { color: var(--muted); margin: 0 0 2rem; line-height: 1.5; }
+    .grid {
+      display: grid;
+      gap: 1rem;
+    }
+    @media (min-width: 600px) {
+      .grid { grid-template-columns: repeat(3, 1fr); }
+    }
+    a.card {
+      display: block;
+      background: var(--card);
+      border: 1px solid #2a3348;
+      border-radius: 14px;
+      padding: 1.25rem;
+      text-decoration: none;
+      color: inherit;
+      transition: transform 0.15s, border-color 0.15s;
+    }
+    a.card:hover {
+      transform: translateY(-2px);
+      border-color: var(--accent);
+    }
+    a.card strong { display: block; font-size: 1.1rem; margin-bottom: 0.35rem; }
+    a.card span { color: var(--muted); font-size: 0.9rem; line-height: 1.4; }
+    .badge {
+      display: inline-block;
+      margin-top: 2rem;
+      padding: 0.35rem 0.75rem;
+      border-radius: 999px;
+      background: #243049;
+      color: var(--accent2);
+      font-size: 0.85rem;
+    }
+    footer {
+      margin-top: 2rem;
+      color: var(--muted);
+      font-size: 0.85rem;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>AI Frontends Hub</h1>
+    <p class="lead">
+      One Hugging Face Space, three frontends, one shared library under <code>/data/shared</code>.
+      Pick a UI — only one runs at a time to save RAM on the free tier.
+    </p>
+    <div class="grid">
+      <a class="card" href="/api/switch/sillytavern">
+        <strong>SillyTavern</strong>
+        <span>Classic ST UI. Characters &amp; lorebooks live-sync from shared folders.</span>
+      </a>
+      <a class="card" href="/api/switch/lumiverse">
+        <strong>Lumiverse</strong>
+        <span>Bun + SQLite frontend. Imports shared cards on sync.</span>
+      </a>
+      <a class="card" href="/api/switch/marinara">
+        <strong>Marinara Engine</strong>
+        <span>Roleplay / game engine. ST bulk import from <code>/data/shared</code>.</span>
+      </a>
+    </div>
+    <div class="badge" id="active">Loading active frontend…</div>
+    <footer>
+      Shared data: <code>/data/shared/characters</code>, <code>/data/shared/world_info</code>,
+      <code>/data/shared/connections</code>. Return here anytime via <code>/hub</code>.
+    </footer>
+  </main>
+  <script>
+    fetch('/api/active').then(r => r.json()).then(d => {
+      document.getElementById('active').textContent = 'Currently active: ' + (d.active || 'unknown');
+    }).catch(() => {
+      document.getElementById('active').textContent = 'Hub API starting…';
+    });
+  </script>
+</body>
+</html>
