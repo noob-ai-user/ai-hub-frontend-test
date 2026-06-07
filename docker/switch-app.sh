@@ -59,4 +59,12 @@ upstream active_backend {
 }
 EOF
 
+# CRITICAL: nginx caches upstream at load — must reload after every switch
+if nginx -s reload -c /opt/hub/docker/nginx.conf 2>/dev/null; then
+  echo "[hub] nginx reloaded → ${APP} on :${PORT}" >&2
+else
+  echo "[hub] nginx reload skipped (not running yet)" >&2
+fi
+
 echo "[hub] switched to ${APP} on internal port ${PORT}" >&2
+sleep 1
