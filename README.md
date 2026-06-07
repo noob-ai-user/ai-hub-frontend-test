@@ -33,21 +33,29 @@ Deploy **SillyTavern**, **Lumiverse**, and **Marinara Engine** on a single [Hugg
 
 HF free Spaces expose **one port (7860)** and have **16 GB RAM**. Running three Node/Bun servers at once is tight, so this hub runs **one frontend at a time** and lets you switch from a launcher at `/hub`.
 
-## Quick deploy on Hugging Face
+## Deploy on Hugging Face (import this repo)
 
-1. **Create a Docker Space** at [huggingface.co/new-space](https://huggingface.co/new-space).
-2. Push this repo (or copy `Dockerfile` + `docker/` + `scripts/` + `config/` + `public/`).
-3. **Settings → Persistent storage** → attach a bucket mounted at **`/data`**.
-4. **Settings → Variables and secrets** (recommended):
+**Repo:** https://github.com/Sexlovr/ai-hub-frontend
+
+1. Open **[huggingface.co/new-space](https://huggingface.co/new-space)**
+2. Set **Space SDK** → **Docker**
+3. Under **Create from**, choose **Import from GitHub** (or paste the repo URL):
+   ```
+   https://github.com/Sexlovr/ai-hub-frontend
+   ```
+4. Click **Create Space** — HF clones the repo and builds the `Dockerfile` automatically.
+5. **Settings → Persistent storage** → attach a bucket mounted at **`/data`**
+6. **Settings → Variables and secrets** (recommended):
 
 | Secret | Purpose |
 |--------|---------|
-| `OWNER_PASSWORD` | Lumiverse admin password (default user: `admin`) |
+| `OWNER_PASSWORD` | Lumiverse admin password (login: `admin`) |
 | `ADMIN_SECRET` | Marinara privileged APIs + auto ST import sync |
-| `BASIC_AUTH_USER` / `BASIC_AUTH_PASS` | Optional HTTP auth in front of everything |
 
-5. Wait for the build (~10–15 min first time), then open the Space URL.
-6. Visit **`/hub`** to pick SillyTavern, Lumiverse, or Marinara.
+7. Wait for the build (~10–15 min first time), then open the Space URL.
+8. Visit **`/hub`** to pick SillyTavern, Lumiverse, or Marinara.
+
+The `Dockerfile` pulls **Marinara Engine `:latest`** from GHCR, clones **Lumiverse** from GitHub, and bundles hub scripts from **Sexlovr/ai-hub-frontend**.
 
 ## Shared data layout
 
