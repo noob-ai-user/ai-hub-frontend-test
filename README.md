@@ -33,29 +33,42 @@ Deploy **SillyTavern**, **Lumiverse**, and **Marinara Engine** on a single [Hugg
 
 HF free Spaces expose **one port (7860)** and have **16 GB RAM**. Running three Node/Bun servers at once is tight, so this hub runs **one frontend at a time** and lets you switch from a launcher at `/hub`.
 
-## Deploy on Hugging Face (import this repo)
+## Deploy on Hugging Face
 
 **Repo:** https://github.com/Sexlovr/ai-hub-frontend
 
-1. Open **[huggingface.co/new-space](https://huggingface.co/new-space)**
-2. Set **Space SDK** → **Docker**
-3. Under **Create from**, choose **Import from GitHub** (or paste the repo URL):
-   ```
-   https://github.com/Sexlovr/ai-hub-frontend
-   ```
-4. Click **Create Space** — HF clones the repo and builds the `Dockerfile` automatically.
-5. **Settings → Persistent storage** → attach a bucket mounted at **`/data`**
-6. **Settings → Variables and secrets** (recommended):
+### Option A — Import from GitHub (recommended)
 
-| Secret | Purpose |
-|--------|---------|
-| `OWNER_PASSWORD` | Lumiverse admin password (login: `admin`) |
-| `ADMIN_SECRET` | Marinara privileged APIs + auto ST import sync |
+1. [huggingface.co/new-space](https://huggingface.co/new-space) → **Docker** SDK
+2. **Import from GitHub** → `Sexlovr/ai-hub-frontend`
+3. Create Space → wait for build (~10–15 min)
 
-7. Wait for the build (~10–15 min first time), then open the Space URL.
-8. Visit **`/hub`** to pick SillyTavern, Lumiverse, or Marinara.
+### Option B — Paste Dockerfile only
 
-The `Dockerfile` pulls **Marinara Engine `:latest`** from GHCR, clones **Lumiverse** from GitHub, and bundles hub scripts from **Sexlovr/ai-hub-frontend**.
+The Dockerfile is **self-contained** — it clones hub scripts from GitHub at build time. You only need **two files** in the Space:
+
+1. `Dockerfile` (from this repo)
+2. `README.md` (this file, including the `---` yaml block at the top)
+
+Do **not** paste only the Dockerfile without `README.md` — HF needs the yaml frontmatter (`sdk: docker`, `app_port: 7860`).
+
+### After create (both options)
+
+1. **Settings → Persistent storage** → mount bucket at **`/data`**
+2. **Settings → Secrets** → `OWNER_PASSWORD` (Lumiverse, user `admin`)
+3. Open Space URL → visit **`/hub`** to switch frontends
+
+### Space got Paused? (common on free tier)
+
+| Cause | Fix |
+|-------|-----|
+| Build failed (`COPY docker/` missing) | Use the new self-contained Dockerfile (clones from GitHub) |
+| **Storage limit exceeded** during build | Dockerfile now uses `marinara:lite`; delete Space & recreate fresh |
+| Only pasted Dockerfile, no README | Add `README.md` with docker sdk frontmatter |
+| Build still running | Check **Logs** tab — first build takes 10–20 min |
+| Manually paused | Click **Restart** on the Space page |
+
+Free tier has ~50 GB ephemeral build disk. This image pulls SillyTavern + Marinara lite + builds Lumiverse — close to the limit. If build keeps failing, create with build-arg `MARINARA_IMAGE=ghcr.io/pasta-devs/marinara-engine:lite` (already the default).
 
 ## Shared data layout
 
