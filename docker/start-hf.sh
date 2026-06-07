@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# HF Spaces: runs as UID 1000, nginx on :7860 (WebSocket-safe), no root.
 set -uo pipefail
 
 echo "[hub] HF start $(date -Is)" >&2
@@ -21,27 +20,38 @@ echo "${ACTIVE}" > "${DATA_ROOT}/.active_app"
 
 echo "[hub] starting hub-api on :7870" >&2
 python3 /opt/hub/docker/hub-api.py >&2 &
-HUB_API_PID=$!
 
 echo "[hub] booting frontend: ${ACTIVE}" >&2
 /opt/hub/docker/switch-app.sh "${ACTIVE}" 2>&1 || echo "[hub] warn: switch-app" >&2
 
-# Wait for backend before nginx (avoids 502 on cold start)
 case "${ACTIVE}" in
   sillytavern) BACKEND_PORT="${ST_PORT:-8000}" ;;
   lumiverse)   BACKEND_PORT="${LUMIVERSE_PORT:-7861}" ;;
   marinara)    BACKEND_PORT="${MARINARA_PORT:-7862}" ;;
   *)           BACKEND_PORT="${ST_PORT:-8000}" ;;
 esac
+
+port_up() {
+  (echo >/dev/tcp/127.0.0.1/"${BACKEND_PORT}") >/dev/null 2>&1
+}
+
 echo "[hub] waiting for backend :${BACKEND_PORT}" >&2
-for _ in $(seq 1 45); do
-  if curl -fsS -o /dev/null "http://127.0.0.1:${BACKEND_PORT}/" 2>/dev/null \
-     || curl -fsS -o /dev/null "http://127.0.0.1:${BACKEND_PORT}/api/health" 2>/dev/null; then
-    echo "[hub] backend ready on :${BACKEND_PORT}" >&2
+ready=0
+for i in $(seq 1 90); do
+  if port_up; then
+    echo "[hub] backend ready on :${BACKEND_PORT} (after ${i}s)" >&2
+    ready=1
     break
+  fi
+  if (( i % 10 == 0 )); then
+    echo "[hub] still waiting for :${BACKEND_PORT} (${i}s)..." >&2
   fi
   sleep 1
 done
+
+if [[ "${ready}" -eq 0 ]]; then
+  echo "[hub] ERROR: backend :${BACKEND_PORT} never opened — check [sillytavern] lines above" >&2
+fi
 
 (while true; do sleep 300; /opt/hub/scripts/sync-shared-data.sh || true; done) >&2 &
 
