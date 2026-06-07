@@ -58,14 +58,20 @@ Do **not** paste only the Dockerfile without `README.md` — HF needs the yaml f
 2. **Settings → Secrets** (optional but recommended):
    - `OWNER_PASSWORD` — Lumiverse first-time setup (user `admin`)
    - `PUBLIC_ORIGIN` — `https://your-space.hf.space` (auto-detected from `SPACE_HOST` when omitted)
-3. Open Space URL → visit **`/hub`** to switch frontends
+3. Open Space URL → visit **`/api/hub`** to switch frontends
 
-### `/hub` shows 404 or Lumiverse login fails?
+### `/hub` shows React 404 or Lumiverse login fails?
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| React **404 Not Found** at `/hub` | Request hit the active SPA instead of the hub launcher | **Factory rebuild** from latest repo; open exact path `/hub` (not `/hub/…`) |
+| React **404 Not Found** at `/hub` | Lumiverse’s **PWA service worker** serves its cached SPA for `/hub` | Use **`/api/hub`** or **`/hub.html`** instead; or switch directly via `/api/switch/sillytavern` |
 | Lumiverse **sign-in error** | BetterAuth `baseURL` was `http://localhost:7861` | Rebuild; set `PUBLIC_ORIGIN` secret if auto-detect fails; check Logs for `[lumiverse] AUTH_BASE_URL=https://…` |
+
+**Quick switch links** (work even when the launcher page doesn’t):
+
+- SillyTavern: `/api/switch/sillytavern`
+- Lumiverse: `/api/switch/lumiverse`
+- Marinara: `/api/switch/marinara`
 
 ### Space got Paused instantly (no logs)?
 
@@ -107,7 +113,7 @@ After rebuild you should immediately see `[hub] HF start ...` in Logs.
 
 ## Switching frontends
 
-- Launcher: `https://<your-space>.hf.space/hub`
+- Launcher: `https://<your-space>.hf.space/api/hub` (or `/hub.html`)
 - API: `GET /api/switch/sillytavern` | `lumiverse` | `marinara`
 - Active app root: `https://<your-space>.hf.space/`
 
