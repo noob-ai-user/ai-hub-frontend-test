@@ -55,8 +55,17 @@ Do **not** paste only the Dockerfile without `README.md` — HF needs the yaml f
 ### After create (both options)
 
 1. **Settings → Persistent storage** → mount bucket at **`/data`**
-2. **Settings → Secrets** → `OWNER_PASSWORD` (Lumiverse, user `admin`)
+2. **Settings → Secrets** (optional but recommended):
+   - `OWNER_PASSWORD` — Lumiverse first-time setup (user `admin`)
+   - `PUBLIC_ORIGIN` — `https://your-space.hf.space` (auto-detected from `SPACE_HOST` when omitted)
 3. Open Space URL → visit **`/hub`** to switch frontends
+
+### `/hub` shows 404 or Lumiverse login fails?
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| React **404 Not Found** at `/hub` | Request hit the active SPA instead of the hub launcher | **Factory rebuild** from latest repo; open exact path `/hub` (not `/hub/…`) |
+| Lumiverse **sign-in error** | BetterAuth `baseURL` was `http://localhost:7861` | Rebuild; set `PUBLIC_ORIGIN` secret if auto-detect fails; check Logs for `[lumiverse] AUTH_BASE_URL=https://…` |
 
 ### Space got Paused instantly (no logs)?
 
