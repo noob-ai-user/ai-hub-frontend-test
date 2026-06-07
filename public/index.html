@@ -79,7 +79,9 @@
       Pick a UI — only one runs at a time to save RAM on the free tier.
     </p>
     <p class="lead" style="margin-top:-1.25rem;font-size:0.9rem;">
-      Bookmark <code>/api/hub</code> (or <code>/hub.html</code>) — Lumiverse’s PWA cache breaks bare <code>/hub</code> in some browsers.
+      After using Lumiverse, open the hub via <strong><a href="/api/hub" style="color:var(--accent2)">/api/hub</a></strong>
+      or <strong><a href="/hub.html" style="color:var(--accent2)">/hub.html</a></strong>
+      (not bare <code>/hub</code> — Lumiverse’s PWA intercepts it).
     </p>
     <div class="grid">
       <a class="card" href="/api/switch/sillytavern">
@@ -102,6 +104,20 @@
     </footer>
   </main>
   <script>
+    // Lumiverse's PWA service worker hijacks /hub after first visit.
+    // Clear it when the hub loads so /hub and /api/hub keep working.
+    (async function clearLumiversePwa() {
+      if (!('serviceWorker' in navigator)) return;
+      try {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((r) => r.unregister()));
+        if ('caches' in window) {
+          const keys = await caches.keys();
+          await Promise.all(keys.map((k) => caches.delete(k)));
+        }
+      } catch (_) { /* ignore */ }
+    })();
+
     fetch('/api/active').then(r => r.json()).then(d => {
       document.getElementById('active').textContent = 'Currently active: ' + (d.active || 'unknown');
     }).catch(() => {
