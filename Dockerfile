@@ -1,5 +1,5 @@
 # =============================================================================
-# AI Frontends Hub — Hugging Face Space (UID 1000, no root, lightweight build)
+# AI Frontends Hub — Hugging Face Space (UID 1000 / node user, lightweight)
 # Repo: https://github.com/Sexlovr/ai-hub-frontend
 # =============================================================================
 
@@ -9,36 +9,34 @@ RUN apk add --no-cache git \
 
 FROM ghcr.io/sillytavern/sillytavern:latest AS sillytavern
 FROM ghcr.io/pasta-devs/marinara-engine:lite AS marinara
-
-FROM oven/bun:1-slim AS bun-bin
+FROM ghcr.io/prolix-oc/lumiverse:latest AS lumiverse
 
 FROM node:24-bookworm-slim
 
-# HF Spaces always run containers as UID 1000
-RUN useradd -m -u 1000 user
-
+# node:24-bookworm-slim already has `node` at UID 1000 (HF requirement)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      nginx python3 curl ca-certificates git rsync \
+      nginx python3 curl ca-certificates rsync \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /tmp && chmod 777 /tmp
 
-COPY --from=bun-bin /usr/local/bin/bun /usr/local/bin/bun
-COPY --from=hub-src --chown=user:user /hub/docker /opt/hub/docker/
-COPY --from=hub-src --chown=user:user /hub/scripts /opt/hub/scripts/
-COPY --from=hub-src --chown=user:user /hub/config /opt/hub/config/
-COPY --from=hub-src --chown=user:user /hub/public /opt/hub/public/
-COPY --from=sillytavern --chown=user:user /home/node/app /apps/sillytavern
-COPY --from=marinara --chown=user:user /app /apps/marinara
+COPY --from=lumiverse /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=hub-src --chown=node:node /hub/docker /opt/hub/docker/
+COPY --from=hub-src --chown=node:node /hub/scripts /opt/hub/scripts/
+COPY --from=hub-src --chown=node:node /hub/config /opt/hub/config/
+COPY --from=hub-src --chown=node:node /hub/public /opt/hub/public/
+COPY --from=sillytavern --chown=node:node /home/node/app /apps/sillytavern
+COPY --from=marinara --chown=node:node /app /apps/marinara
+COPY --from=lumiverse --chown=node:node /app /apps/lumiverse
 
-# Lumiverse cloned at runtime on first switch (saves ~5GB build disk)
-RUN git clone --depth 1 https://github.com/prolix-oc/Lumiverse.git /apps/lumiverse-src \
-    && chown -R user:user /apps/lumiverse-src /opt/hub /apps
+# HF reverse-proxy auth fix for Lumiverse BetterAuth
+RUN sed -i 's/c.req.header("host")/c.req.header("x-forwarded-host") || c.req.header("host")/g' /apps/lumiverse/src/app.ts \
+    && sed -i 's/`http:\/\/${host}`/`${(c.req.header("x-forwarded-proto") || "http")}:\/\/${host}`/g' /apps/lumiverse/src/app.ts || true
 
 RUN chmod +x /opt/hub/docker/*.sh /opt/hub/scripts/*.sh
 
-USER user
-ENV HOME=/home/user
-WORKDIR /home/user
+USER node
+ENV HOME=/home/node
+WORKDIR /home/node
 
 ENV DATA_ROOT=/data
 ENV HUB_PORT=7860
@@ -52,5 +50,4 @@ ENV FORWARDED_PROTO=https
 
 EXPOSE 7860
 
-# Foreground process for HF — logs go to stderr immediately
 CMD ["bash", "/opt/hub/docker/start-hf.sh"]
