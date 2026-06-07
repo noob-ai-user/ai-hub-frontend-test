@@ -58,17 +58,21 @@ Do **not** paste only the Dockerfile without `README.md` — HF needs the yaml f
 2. **Settings → Secrets** → `OWNER_PASSWORD` (Lumiverse, user `admin`)
 3. Open Space URL → visit **`/hub`** to switch frontends
 
-### Space got Paused? (common on free tier)
+### Space got Paused instantly (no logs)?
+
+HF runs Docker Spaces as **UID 1000** (non-root). The old image used root + supervisord + nginx system mode → container died before any log appeared.
+
+**Current fix:** runs as `user` (uid 1000), lightweight build (no Lumiverse compile at build time), nginx on `/tmp` paths.
 
 | Cause | Fix |
 |-------|-----|
-| Build failed (`COPY docker/` missing) | Use the new self-contained Dockerfile (clones from GitHub) |
-| **Storage limit exceeded** during build | Dockerfile now uses `marinara:lite`; delete Space & recreate fresh |
-| Only pasted Dockerfile, no README | Add `README.md` with docker sdk frontmatter |
-| Build still running | Check **Logs** tab — first build takes 10–20 min |
-| Manually paused | Click **Restart** on the Space page |
+| Instant pause, empty logs | Pull latest repo & **Factory rebuild** |
+| Build failed | Check **Logs** tab after rebuild |
+| Storage limit exceeded | Delete Space, recreate fresh |
+| Only pasted Dockerfile | Also need `README.md` with `sdk: docker` yaml |
+| Lumiverse first open slow | Normal — builds on first switch into `/data` |
 
-Free tier has ~50 GB ephemeral build disk. This image pulls SillyTavern + Marinara lite + builds Lumiverse — close to the limit. If build keeps failing, create with build-arg `MARINARA_IMAGE=ghcr.io/pasta-devs/marinara-engine:lite` (already the default).
+After rebuild you should immediately see `[hub] HF start ...` in Logs.
 
 ## Shared data layout
 
