@@ -28,10 +28,7 @@ COPY --from=sillytavern --chown=node:node /home/node/app /apps/sillytavern
 COPY --from=marinara --chown=node:node /app /apps/marinara
 COPY --from=lumiverse --chown=node:node /app /apps/lumiverse
 
-# HF reverse-proxy auth fix for Lumiverse BetterAuth
-RUN sed -i 's/c.req.header("host")/c.req.header("x-forwarded-host") || c.req.header("host")/g' /apps/lumiverse/src/app.ts \
-    && sed -i 's/`http:\/\/${host}`/`${(c.req.header("x-forwarded-proto") || "http")}:\/\/${host}`/g' /apps/lumiverse/src/app.ts || true
-
+# Lumiverse image already includes HF reverse-proxy auth patch
 RUN chmod +x /opt/hub/docker/*.sh /opt/hub/scripts/*.sh
 
 USER node
