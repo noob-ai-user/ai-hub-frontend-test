@@ -15,7 +15,7 @@ fi
 sed -i \
   -e 's/whitelistMode: true/whitelistMode: false/g' \
   -e 's/enableForwardedWhitelist: true/enableForwardedWhitelist: false/g' \
-  -e 's/enabled: true/enabled: false/g' \
+  -e 's/^listen: false/listen: true/g' \
   "${CONFIG}" 2>/dev/null || true
 
 # hostWhitelist block — only flip the enabled line under hostWhitelist if present
