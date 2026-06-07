@@ -29,7 +29,8 @@ COPY --from=marinara --chown=node:node /app /apps/marinara
 COPY --from=lumiverse --chown=node:node /app /apps/lumiverse
 
 # Lumiverse image already includes HF reverse-proxy auth patch
-RUN chmod +x /opt/hub/docker/*.sh /opt/hub/scripts/*.sh
+RUN chmod +x /opt/hub/docker/*.sh /opt/hub/scripts/*.sh \
+    && echo 'upstream active_backend { server 127.0.0.1:8000; }' > /opt/hub/docker/upstream.conf
 
 USER node
 ENV HOME=/home/node
