@@ -55,9 +55,14 @@ port_up() {
   (echo >/dev/tcp/127.0.0.1/"${BACKEND_PORT}") >/dev/null 2>&1
 }
 
-echo "[hub] waiting for backend :${BACKEND_PORT}" >&2
+WAIT_MAX=120
+if [[ "${ACTIVE}" == "sillytavern" ]]; then
+  WAIT_MAX=300
+fi
+
+echo "[hub] waiting for backend :${BACKEND_PORT} (up to ${WAIT_MAX}s)" >&2
 ready=0
-for i in $(seq 1 90); do
+for i in $(seq 1 "${WAIT_MAX}"); do
   if port_up; then
     echo "[hub] backend ready on :${BACKEND_PORT} (after ${i}s)" >&2
     ready=1
