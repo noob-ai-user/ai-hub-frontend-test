@@ -16,7 +16,9 @@ export TRUST_ANY_ORIGIN=true
 # BetterAuth must use the public HTTPS URL (not localhost) behind HF proxy.
 resolved="$(bash /opt/hub/docker/resolve-public-origin.sh || true)"
 if [[ -n "${resolved}" ]]; then
-  export AUTH_BASE_URL="${resolved%/}/apps/lumiverse"
+  # Root public origin (no /apps/lumiverse) — BetterAuth handler rewrites to
+  # https://host/api/auth/... which matches baseURL; subpath in baseURL caused 404.
+  export AUTH_BASE_URL="${resolved%/}"
   echo "[lumiverse] AUTH_BASE_URL=${AUTH_BASE_URL}" >&2
 else
   echo "[lumiverse] WARN: login may fail — set PUBLIC_ORIGIN=https://YOUR-SPACE.hf.space in HF Secrets" >&2
@@ -24,11 +26,7 @@ fi
 
 mkdir -p "${DATA_DIR}"
 
-# Re-apply hub patches every boot (lumiverse runs from src/, not pre-baked dist only).
-if ! bash /opt/hub/docker/patch-lumiverse-auth.sh; then
-  echo "[lumiverse] FATAL: auth subpath patch failed — check /apps/lumiverse/src/app.ts" >&2
-  exit 1
-fi
+bash /opt/hub/docker/patch-lumiverse-auth.sh || echo "[lumiverse] warn: optional auth patch skipped" >&2
 bash /opt/hub/docker/patch-lumiverse-sw.sh || echo "[lumiverse] warn: PWA patch failed" >&2
 
 exec bun run src/index.ts
