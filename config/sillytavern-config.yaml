@@ -31,3 +31,6 @@ sessionTimeout: -1
 disableCsrfProtection: true
 securityOverride: true
 enableUserAccounts: false
+performance:
+  lazyLoadCharacters: true
+  memoryCacheCapacity: 100mb
