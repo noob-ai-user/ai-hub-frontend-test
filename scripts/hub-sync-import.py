@@ -36,6 +36,10 @@ EXPORT_ONLY = os.environ.get("HUB_SYNC_EXPORT", "").strip().lower()
 OWNER_PASSWORD = os.environ.get("OWNER_PASSWORD") or os.environ.get("HUB_SYNC_PASSWORD", "")
 HUB_PREFIX_RE = re.compile(r"^hub_(st|marinara|lumiverse)_", re.I)
 LEGACY_HUB_RE = re.compile(r"^hub_(st|marinara|lumiverse)_[A-Za-z0-9]{6,8}_", re.I)
+CANONICAL_HUB_RE = re.compile(r"^hub_(marinara|lumiverse)_[a-z][a-z0-9_]*\.png$", re.I)
+CANONICAL_ST_HUB_RE = re.compile(r"^hub_st_[a-z][a-z0-9_]*\.png$", re.I)
+ST_ID_PREFIX_RE = re.compile(r"^[A-Za-z0-9]{6,12}\s+")
+ID_SLUG_RE = re.compile(r"^[a-z0-9]{6,12}_")
 
 
 def log(msg: str) -> None:
@@ -285,29 +289,49 @@ def char_name_from_path(path: Path) -> str:
     if HUB_PREFIX_RE.match(path.name):
         parts = stem.split("_", 2)
         if len(parts) >= 3:
-            return parts[2].replace("_", " ")
-    return stem
+            slug = parts[2]
+            if parts[1] in {"marinara", "lumiverse", "st"} and not ID_SLUG_RE.match(slug):
+                return slug.replace("_", " ")
+    return st_display_name(stem)
 
 
-def cleanup_legacy_hub_files(state: dict) -> int:
+def st_display_name(stem: str) -> str:
+    cleaned = ST_ID_PREFIX_RE.sub("", stem).strip()
+    return cleaned or stem
+
+
+def is_valid_shared_card(name: str) -> bool:
+    if re.match(r"^default_.+\.(png|json)$", name, re.I):
+        return True
+    if CANONICAL_HUB_RE.match(name):
+        return True
+    if CANONICAL_ST_HUB_RE.match(name):
+        slug = name[len("hub_st_") : -4]
+        return not ID_SLUG_RE.match(slug)
+    return False
+
+
+def is_importable_hub_for_st(name: str) -> bool:
+    return bool(CANONICAL_HUB_RE.match(name))
+
+
+def cleanup_shared_junk(state: dict) -> int:
     char_dir = SHARED / "characters"
     if not char_dir.is_dir():
         return 0
     removed = 0
-    canonical_paths = {
-        entry.get("file")
-        for entry in state.get("exports", {}).values()
-        if isinstance(entry, dict) and entry.get("file")
-    }
-    for path in list(char_dir.glob("hub_*.png")):
-        if LEGACY_HUB_RE.match(path.name) and f"characters/{path.name}" not in canonical_paths:
-            try:
-                path.unlink()
-                state["characters"].pop(f"characters/{path.name}", None)
-                removed += 1
-                log(f"removed legacy duplicate: characters/{path.name}")
-            except OSError as exc:
-                log(f"cleanup failed for {path.name}: {exc}")
+    for path in list(char_dir.iterdir()):
+        if not path.is_file() or path.name.startswith("."):
+            continue
+        if is_valid_shared_card(path.name):
+            continue
+        try:
+            path.unlink()
+            state["characters"].pop(f"characters/{path.name}", None)
+            removed += 1
+            log(f"removed junk from shared: characters/{path.name}")
+        except OSError as exc:
+            log(f"cleanup failed for {path.name}: {exc}")
     return removed
 
 
@@ -337,6 +361,17 @@ def write_canonical_export(
             except OSError:
                 pass
 
+    if dest.is_file() and dest.read_bytes() == png_bytes:
+        state["exports"][ckey] = {
+            "file": rel,
+            "filename": filename,
+            "updated": updated,
+            "name": name,
+            "source_id": source_id,
+        }
+        state["characters"][rel] = file_sig(dest)
+        return False
+
     dest.write_bytes(png_bytes)
     state["exports"][ckey] = {
         "file": rel,
@@ -360,7 +395,7 @@ def export_marinara_to_shared(state: dict) -> int:
         log(f"marinara list failed ({status}): {payload}")
         return 0
 
-    exported = 0
+    best: dict[str, dict] = {}
     for item in payload:
         if not isinstance(item, dict):
             continue
@@ -382,19 +417,28 @@ def export_marinara_to_shared(state: dict) -> int:
             name = str(data.get("name") or name)
 
         ckey = canonical_key("marinara", name)
+        prev = best.get(ckey)
+        if prev and prev["updated"] >= updated:
+            continue
+        best[ckey] = {"char_id": char_id, "name": name, "updated": updated}
+
+    exported = 0
+    for ckey, info in best.items():
         prev = state["exports"].get(ckey, {})
-        if prev.get("updated") == updated and prev.get("file"):
+        if prev.get("updated") == info["updated"] and prev.get("file"):
             if (SHARED / prev["file"]).is_file():
                 continue
 
         png_status, png_bytes = http_bytes(
-            f"http://127.0.0.1:{MARINARA_PORT}/api/characters/{char_id}/export-png"
+            f"http://127.0.0.1:{MARINARA_PORT}/api/characters/{info['char_id']}/export-png"
         )
         if png_status >= 400 or not png_bytes:
-            log(f"marinara export failed for {char_id} ({png_status})")
+            log(f"marinara export failed for {info['char_id']} ({png_status})")
             continue
 
-        if write_canonical_export(state, "marinara", name, png_bytes, updated, char_id):
+        if write_canonical_export(
+            state, "marinara", info["name"], png_bytes, info["updated"], info["char_id"]
+        ):
             exported += 1
             log(f"exported character → shared: {state['exports'][ckey]['file']}")
 
@@ -421,7 +465,7 @@ def export_lumiverse_to_shared(state: dict) -> int:
     if not isinstance(chars, list):
         return 0
 
-    exported = 0
+    best: dict[str, dict] = {}
     for item in chars:
         if not isinstance(item, dict):
             continue
@@ -432,20 +476,29 @@ def export_lumiverse_to_shared(state: dict) -> int:
         updated = str(item.get("updated_at") or "")
         name = str(item.get("name") or "character")
         ckey = canonical_key("lumiverse", name)
+        prev = best.get(ckey)
+        if prev and str(prev["updated"]) >= updated:
+            continue
+        best[ckey] = {"char_id": char_id, "name": name, "updated": updated}
+
+    exported = 0
+    for ckey, info in best.items():
         prev = state["exports"].get(ckey, {})
-        if prev.get("updated") == updated and prev.get("file"):
+        if prev.get("updated") == info["updated"] and prev.get("file"):
             if (SHARED / prev["file"]).is_file():
                 continue
 
         png_status, png_bytes = http_bytes(
-            f"{base}/api/v1/characters/{char_id}/export?format=png",
+            f"{base}/api/v1/characters/{info['char_id']}/export?format=png",
             opener=opener,
         )
         if png_status >= 400 or not png_bytes:
-            log(f"lumiverse export failed for {char_id} ({png_status})")
+            log(f"lumiverse export failed for {info['char_id']} ({png_status})")
             continue
 
-        if write_canonical_export(state, "lumiverse", name, png_bytes, updated, char_id):
+        if write_canonical_export(
+            state, "lumiverse", info["name"], png_bytes, info["updated"], info["char_id"]
+        ):
             exported += 1
             log(f"exported character → shared: {state['exports'][ckey]['file']}")
 
@@ -468,7 +521,7 @@ def sync_st_to_shared(state: dict) -> int:
         if path.name.startswith("hub_"):
             continue
 
-        name = char_name_from_path(path)
+        name = st_display_name(path.stem)
         if ext == ".png":
             dest_name = canonical_filename("st", name)
         else:
@@ -476,15 +529,16 @@ def sync_st_to_shared(state: dict) -> int:
 
         rel = f"characters/{dest_name}"
         sig = file_sig(path)
-        st_key = f"st_src:{path.name}"
-        if state["characters"].get(st_key) == sig and (SHARED / rel).is_file():
+        ckey = canonical_key("st", name)
+        prev = state["exports"].get(ckey, {})
+        if state["characters"].get(rel) == sig and prev.get("source_id") == path.name:
             continue
 
         try:
             shutil.copy2(path, SHARED / rel)
-            state["characters"][st_key] = sig
+            state["characters"][f"st_src:{path.name}"] = sig
             state["characters"][rel] = file_sig(SHARED / rel)
-            state["exports"][canonical_key("st", name)] = {
+            state["exports"][ckey] = {
                 "file": rel,
                 "filename": dest_name,
                 "updated": sig,
@@ -510,9 +564,7 @@ def sync_shared_to_st(state: dict) -> int:
     for path in sorted(char_dir.iterdir()):
         if not path.is_file() or path.suffix.lower() != ".png":
             continue
-        if not HUB_PREFIX_RE.match(path.name):
-            continue
-        if path.name.lower().startswith("hub_st_"):
+        if not is_importable_hub_for_st(path.name):
             continue
 
         name = char_name_from_path(path)
@@ -720,7 +772,7 @@ def import_lorebooks_to_marinara(state: dict) -> int:
 def main() -> int:
     log(f"{time.strftime('%Y-%m-%dT%H:%M:%S%z')} syncing shared library")
     state = load_state()
-    cleanup_legacy_hub_files(state)
+    cleanup_shared_junk(state)
 
     n_export_marinara = export_marinara_to_shared(state)
     n_export_lumiverse = export_lumiverse_to_shared(state)
