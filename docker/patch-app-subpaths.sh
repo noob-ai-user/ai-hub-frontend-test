@@ -37,6 +37,9 @@ def rewrite_api_js(text: str) -> str:
     text = text.replace('const At="/api"', f'const At="{prefix}/api"')
     text = text.replace("const At='/api'", f"const At='{prefix}/api'")
     text = text.replace("qs=`/api/v1`", f"qs=`{prefix}/api/v1`")
+    # CSS url() templates and other interpolated /api/v1 paths in minified bundles.
+    text = text.replace("/api/v1/theme-assets", f"{prefix}/api/v1/theme-assets")
+    text = text.replace("/api/v1/image-gen", f"{prefix}/api/v1/image-gen")
 
     def repl_quoted(match: re.Match[str]) -> str:
         quote, path = match.group(1), match.group(2)
@@ -52,6 +55,20 @@ def rewrite_api_js(text: str) -> str:
 
     text = re.sub(r'(["\'])(/api[^"\'\\]*)\1', repl_quoted, text)
     text = re.sub(r"`(/api[^`\\]*)`", repl_backtick, text)
+    return text
+
+
+def rewrite_router_basename(text: str) -> str:
+    """React Router defaults to basename=/ — breaks SPA routing under /apps/{app}/."""
+    basename_default = f"basename:e=`{prefix}`"
+    replacements = (
+        ("basename:e=`/`", basename_default),
+        ("e.basename||`/`", f"e.basename||`{prefix}`"),
+        ("S=e.basename||`/`", f"S=e.basename||`{prefix}`"),
+        ("c=e.basename||`/`", f"c=e.basename||`{prefix}`"),
+    )
+    for old, new in replacements:
+        text = text.replace(old, new)
     return text
 
 
@@ -100,6 +117,8 @@ for path in root.rglob("*"):
             text = rewrite_static(text)
         elif name.endswith((".js", ".mjs")):
             text = rewrite_api_js(text)
+            if prefix.endswith("/lumiverse"):
+                text = rewrite_router_basename(text)
         if text != original:
             path.write_text(text, encoding="utf-8")
             changed += 1
