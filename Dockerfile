@@ -31,6 +31,7 @@ COPY --from=lumiverse --chown=node:node /app /apps/lumiverse
 
 # Lumiverse image already includes HF reverse-proxy auth patch
 RUN chmod +x /opt/hub/docker/*.sh /opt/hub/scripts/*.sh \
+    && chmod +x /opt/hub/docker/start-all-apps.sh \
     && echo 'upstream active_backend { server 127.0.0.1:8000; }' > /opt/hub/docker/upstream.conf \
     && /opt/hub/docker/patch-lumiverse-sw.sh
 
