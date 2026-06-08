@@ -39,11 +39,16 @@ for sub in "${USER_SUBDIRS[@]}"; do
   mkdir -p "${USER_DIR}/${sub}"
 done
 
-for sub in characters worlds; do
+for sub in characters worlds chats; do
   if [[ ! -e "${USER_DIR}/${sub}" ]]; then
     mkdir -p "${USER_DIR}/${sub}"
   fi
 done
+
+# Remove extensionless character stubs (e.g. "Seraphina") — they break chat mkdir.
+if [[ -d "${USER_DIR}/characters" ]]; then
+  find "${USER_DIR}/characters" -maxdepth 1 -type f ! -name '*.*' -delete 2>/dev/null || true
+fi
 
 SETTINGS="${USER_DIR}/settings.json"
 CONTENT_LOG="${USER_DIR}/content.log"
