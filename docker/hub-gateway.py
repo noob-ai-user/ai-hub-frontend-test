@@ -147,6 +147,17 @@ def _skip_path(path: str, prefix: str) -> bool:
     )
 
 
+def strip_lumiverse_pwa_html(text: str) -> str:
+    """Remove inline PWA registration — stale SW breaks subpath loading."""
+    text = re.sub(
+        r"<script[^>]*vite-plugin-pwa[^>]*>.*?</script>",
+        "<!-- hub: lumiverse PWA removed -->",
+        text,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    return text
+
+
 def rewrite_root_paths(text: str, prefix: str) -> str:
     """Rewrite root-absolute URLs in HTML/CSS/JSON — <base> does NOT affect paths starting with /."""
 
@@ -156,7 +167,14 @@ def rewrite_root_paths(text: str, prefix: str) -> str:
             return match.group(0)
         return f"{quote}{prefix}{path}{quote}"
 
+    def repl_backtick(match: re.Match[str]) -> str:
+        path = match.group(1)
+        if not path.startswith("/") or _skip_path(path, prefix):
+            return match.group(0)
+        return f"`{prefix}{path}`"
+
     text = re.sub(r'(["\'])(/(?!/)[^"\'\\]*)\1', repl_quoted, text)
+    text = re.sub(r"`(/(?!/)[^`\\]+)`", repl_backtick, text)
     text = re.sub(
         r'(\bimport\s*\(\s*)(["\'])(/(?!/)[^"\'\\]*)\2',
         lambda m: (
@@ -236,7 +254,7 @@ def rewrite_js_api_paths(text: str, prefix: str) -> str:
     return text
 
 
-def rewrite_app_body(data: bytes, content_type: str, prefix: str) -> bytes:
+def rewrite_app_body(data: bytes, content_type: str, prefix: str, app: str = "") -> bytes:
     if not prefix:
         return data
     ct = content_type.lower()
@@ -250,10 +268,17 @@ def rewrite_app_body(data: bytes, content_type: str, prefix: str) -> bytes:
     except UnicodeDecodeError:
         return data
     if "javascript" in ct:
-        text = rewrite_js_api_paths(text, prefix)
+        # SillyTavern uses full root paths (/csrf-token, /version, /api/...).
+        # Marinara/Lumiverse compose URLs as ${API_BASE}${suffix} — only rewrite /api*.
+        if app == "sillytavern":
+            text = rewrite_root_paths(text, prefix)
+        else:
+            text = rewrite_js_api_paths(text, prefix)
     else:
         if "text/html" in ct:
             text = fix_base_href(text, prefix)
+            if app == "lumiverse":
+                text = strip_lumiverse_pwa_html(text)
         text = rewrite_root_paths(text, prefix)
     return text.encode("utf-8")
 
@@ -288,7 +313,7 @@ def resolve_route(path: str, referer: str, query: str = "", origin: str = "") ->
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "hub-gateway/6"
+    server_version = "hub-gateway/7"
 
     def log_message(self, fmt: str, *args) -> None:
         print(f"[gateway] {self.address_string()} - {fmt % args}", flush=True)
@@ -461,7 +486,7 @@ class Handler(BaseHTTPRequestHandler):
             content_encoding = resp.getheader("Content-Encoding")
             data = decompress_body(data, content_encoding)
             if prefix:
-                data = rewrite_app_body(data, content_type, prefix)
+                data = rewrite_app_body(data, content_type, prefix, app)
 
             self.send_response(resp.status)
             for key, value in resp.getheaders():
