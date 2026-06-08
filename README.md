@@ -134,7 +134,7 @@ Trigger a sync manually: `GET /api/sync`
 2. **Switch to the target app** (or wait for the 5‑minute background sync) — export runs from the app you're leaving; import runs in the app that is up.
 3. Hit **`/api/sync`** then refresh the character list.
 4. For **Lumiverse auto-import**, set `OWNER_PASSWORD` in HF Secrets to your **actual Lumiverse login password** (username is auto-read from `/data/lumiverse/owner.credentials` — do not set a wrong `OWNER_USERNAME`).
-5. **Shortcuts:** `/sillytavern`, `/lumiverse`, `/marinara` switch the active UI (all three backends stay running).
+5. **Shortcuts:** `/sillytavern`, `/lumiverse`, `/marinara` switch the active UI (one app at a time — required on HF free tier).
 
 ## Switching frontends
 
