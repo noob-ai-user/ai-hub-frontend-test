@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
 """
-Sync /data/shared → Marinara (auto-import) + Lumiverse staging.
-All three frontends speak standard character cards (PNG chara/ccv3, JSON V1/V2/V3).
-Marinara/Lumiverse already translate internally — hub only needs to import new files.
+Bidirectional hub sync via /data/shared (standard Tavern PNG/JSON cards).
+
+Flow:
+  1. Export running backends (Marinara, Lumiverse) → /data/shared/characters
+  2. Mirror shared → per-app import-staging folders
+  3. Import shared → Marinara + Lumiverse when those backends are up
+
+SillyTavern symlinks characters/worlds directly to shared — no import step.
 """
 from __future__ import annotations
 
 import json
 import mimetypes
 import os
+import re
 import sys
 import time
 import urllib.error
 import urllib.request
+from http.cookiejar import CookieJar
 from pathlib import Path
 from uuid import uuid4
 
@@ -25,6 +32,10 @@ STATE_FILE = STATE_DIR / "import-state.json"
 MARINARA_PORT = int(os.environ.get("MARINARA_PORT", "7862"))
 LUMIVERSE_PORT = int(os.environ.get("LUMIVERSE_PORT", "7861"))
 ST_ROOT = DATA_ROOT / "sillytavern"
+MARINARA_BUILTIN_IDS = {"__professor_mari__"}
+EXPORT_ONLY = os.environ.get("HUB_SYNC_EXPORT", "").strip().lower()
+OWNER_USERNAME = os.environ.get("OWNER_USERNAME", "admin")
+OWNER_PASSWORD = os.environ.get("OWNER_PASSWORD") or os.environ.get("HUB_SYNC_PASSWORD", "")
 
 
 def log(msg: str) -> None:
@@ -33,11 +44,15 @@ def log(msg: str) -> None:
 
 def load_state() -> dict:
     if not STATE_FILE.is_file():
-        return {"characters": {}, "world_info": {}}
+        return {"characters": {}, "world_info": {}, "exports": {}}
     try:
-        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
     except Exception:
-        return {"characters": {}, "world_info": {}}
+        return {"characters": {}, "world_info": {}, "exports": {}}
+    state.setdefault("characters", {})
+    state.setdefault("world_info", {})
+    state.setdefault("exports", {})
+    return state
 
 
 def save_state(state: dict) -> None:
@@ -48,6 +63,18 @@ def save_state(state: dict) -> None:
 def file_sig(path: Path) -> str:
     st = path.stat()
     return f"{st.st_mtime_ns}:{st.st_size}"
+
+
+def safe_name(value: str, fallback: str = "character") -> str:
+    cleaned = re.sub(r'[<>:"/\\|?*\u0000-\u001f]+', " ", value or "")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = cleaned[:80] if cleaned else fallback
+    return cleaned or fallback
+
+
+def shared_filename(source: str, char_id: str, name: str) -> str:
+    short_id = re.sub(r"[^a-zA-Z0-9]", "", char_id)[:8] or "id"
+    return f"hub_{source}_{short_id}_{safe_name(name)}.png"
 
 
 def rsync_shared() -> None:
@@ -82,7 +109,25 @@ def backend_up(port: int) -> bool:
         return False
 
 
-def http_json(method: str, url: str, body: dict | None = None, headers: dict | None = None) -> tuple[int, object]:
+def should_run_export(source: str) -> bool:
+    if not EXPORT_ONLY:
+        return True
+    return EXPORT_ONLY in {source, "all", "export", "exports"}
+
+
+def should_run_import() -> bool:
+    if EXPORT_ONLY and EXPORT_ONLY not in {"all", "import", "imports"}:
+        return False
+    return True
+
+
+def http_json(
+    method: str,
+    url: str,
+    body: dict | None = None,
+    headers: dict | None = None,
+    opener: urllib.request.OpenerDirector | None = None,
+) -> tuple[int, object]:
     data = None
     hdrs = {"Accept": "application/json"}
     if headers:
@@ -91,8 +136,9 @@ def http_json(method: str, url: str, body: dict | None = None, headers: dict | N
         data = json.dumps(body).encode("utf-8")
         hdrs["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
+    open_fn = opener.open if opener else urllib.request.urlopen
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with open_fn(req, timeout=120) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             return resp.status, json.loads(raw) if raw else {}
     except urllib.error.HTTPError as exc:
@@ -104,9 +150,34 @@ def http_json(method: str, url: str, body: dict | None = None, headers: dict | N
         return exc.code, payload
 
 
-def multipart_batch(url: str, files: list[tuple[str, bytes]]) -> tuple[int, object]:
+def http_bytes(
+    url: str,
+    headers: dict | None = None,
+    opener: urllib.request.OpenerDirector | None = None,
+) -> tuple[int, bytes]:
+    hdrs = headers or {}
+    req = urllib.request.Request(url, headers=hdrs, method="GET")
+    open_fn = opener.open if opener else urllib.request.urlopen
+    try:
+        with open_fn(req, timeout=300) as resp:
+            return resp.status, resp.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read()
+
+
+def multipart_batch(
+    url: str,
+    files: list[tuple[str, bytes]],
+    opener: urllib.request.OpenerDirector | None = None,
+    fields: dict[str, str] | None = None,
+) -> tuple[int, object]:
     boundary = f"hubsync-{uuid4().hex}"
     parts: list[bytes] = []
+
+    for key, value in (fields or {}).items():
+        parts.append(f"--{boundary}\r\n".encode())
+        parts.append(f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode())
+        parts.append(f"{value}\r\n".encode())
 
     for name, content in files:
         mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
@@ -125,8 +196,9 @@ def multipart_batch(url: str, files: list[tuple[str, bytes]]) -> tuple[int, obje
         headers={"Content-Type": f"multipart/form-data; boundary={boundary}", "Accept": "application/json"},
         method="POST",
     )
+    open_fn = opener.open if opener else urllib.request.urlopen
     try:
-        with urllib.request.urlopen(req, timeout=300) as resp:
+        with open_fn(req, timeout=300) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             return resp.status, json.loads(raw) if raw else {}
     except urllib.error.HTTPError as exc:
@@ -136,6 +208,158 @@ def multipart_batch(url: str, files: list[tuple[str, bytes]]) -> tuple[int, obje
         except json.JSONDecodeError:
             payload = {"error": raw or exc.reason}
         return exc.code, payload
+
+
+def lumiverse_opener() -> urllib.request.OpenerDirector | None:
+    if not OWNER_PASSWORD:
+        log("lumiverse auto-import skipped — set OWNER_PASSWORD in HF Secrets")
+        return None
+
+    jar = CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    base = f"http://127.0.0.1:{LUMIVERSE_PORT}"
+    status, payload = http_json(
+        "POST",
+        f"{base}/api/auth/sign-in/username",
+        {"username": OWNER_USERNAME, "password": OWNER_PASSWORD},
+        headers={"Origin": base},
+        opener=opener,
+    )
+    if status >= 400:
+        log(f"lumiverse sign-in failed ({status}): {payload}")
+        return None
+    return opener
+
+
+def export_marinara_to_shared(state: dict) -> int:
+    if not should_run_export("marinara"):
+        return 0
+    if not backend_up(MARINARA_PORT):
+        return 0
+
+    status, payload = http_json("GET", f"http://127.0.0.1:{MARINARA_PORT}/api/characters/")
+    if status >= 400 or not isinstance(payload, list):
+        log(f"marinara list failed ({status}): {payload}")
+        return 0
+
+    out_dir = SHARED / "characters"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    exported = 0
+
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        char_id = str(item.get("id") or "")
+        if not char_id or char_id in MARINARA_BUILTIN_IDS:
+            continue
+
+        updated = str(item.get("updatedAt") or item.get("updated_at") or "")
+        export_key = f"marinara:{char_id}"
+        prev = state["exports"].get(export_key, {})
+        if prev.get("updated") == updated and prev.get("file"):
+            shared_rel = prev["file"]
+            if (SHARED / shared_rel).is_file():
+                continue
+
+        name = "character"
+        data = item.get("data")
+        if isinstance(data, str):
+            try:
+                parsed = json.loads(data)
+                if isinstance(parsed, dict):
+                    name = str(parsed.get("name") or name)
+            except json.JSONDecodeError:
+                pass
+        elif isinstance(data, dict):
+            name = str(data.get("name") or name)
+
+        filename = prev.get("filename") or shared_filename("marinara", char_id, name)
+        rel = f"characters/{filename}"
+        dest = SHARED / rel
+
+        png_status, png_bytes = http_bytes(f"http://127.0.0.1:{MARINARA_PORT}/api/characters/{char_id}/export-png")
+        if png_status >= 400 or not png_bytes:
+            log(f"marinara export failed for {char_id} ({png_status})")
+            continue
+
+        dest.write_bytes(png_bytes)
+        state["exports"][export_key] = {
+            "file": rel,
+            "filename": filename,
+            "updated": updated,
+            "name": name,
+        }
+        state["characters"][rel] = file_sig(dest)
+        exported += 1
+        log(f"exported character → shared: {rel}")
+
+    return exported
+
+
+def export_lumiverse_to_shared(state: dict) -> int:
+    if not should_run_export("lumiverse"):
+        return 0
+    if not backend_up(LUMIVERSE_PORT):
+        return 0
+
+    opener = lumiverse_opener()
+    if not opener:
+        return 0
+
+    base = f"http://127.0.0.1:{LUMIVERSE_PORT}"
+    status, payload = http_json("GET", f"{base}/api/v1/characters/?limit=500&offset=0", opener=opener)
+    if status >= 400 or not isinstance(payload, dict):
+        log(f"lumiverse list failed ({status}): {payload}")
+        return 0
+
+    chars = payload.get("data") or []
+    if not isinstance(chars, list):
+        return 0
+
+    out_dir = SHARED / "characters"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    exported = 0
+
+    for item in chars:
+        if not isinstance(item, dict):
+            continue
+        char_id = str(item.get("id") or "")
+        if not char_id:
+            continue
+
+        updated = str(item.get("updated_at") or "")
+        export_key = f"lumiverse:{char_id}"
+        prev = state["exports"].get(export_key, {})
+        if prev.get("updated") == updated and prev.get("file"):
+            shared_rel = prev["file"]
+            if (SHARED / shared_rel).is_file():
+                continue
+
+        name = str(item.get("name") or "character")
+        filename = prev.get("filename") or shared_filename("lumiverse", char_id, name)
+        rel = f"characters/{filename}"
+        dest = SHARED / rel
+
+        png_status, png_bytes = http_bytes(
+            f"{base}/api/v1/characters/{char_id}/export?format=png",
+            opener=opener,
+        )
+        if png_status >= 400 or not png_bytes:
+            log(f"lumiverse export failed for {char_id} ({png_status})")
+            continue
+
+        dest.write_bytes(png_bytes)
+        state["exports"][export_key] = {
+            "file": rel,
+            "filename": filename,
+            "updated": updated,
+            "name": name,
+        }
+        state["characters"][rel] = file_sig(dest)
+        exported += 1
+        log(f"exported character → shared: {rel}")
+
+    return exported
 
 
 def import_characters_to_marinara(state: dict) -> int:
@@ -185,6 +409,76 @@ def import_characters_to_marinara(state: dict) -> int:
                 log(f"imported character → marinara: {rel}")
             else:
                 log(f"marinara import failed for {rel}: {result.get('error', 'unknown')}")
+        batch = []
+        batch_meta = []
+
+    for rel, path in pending:
+        try:
+            content = path.read_bytes()
+        except OSError as exc:
+            log(f"read failed {rel}: {exc}")
+            continue
+        batch.append((path.name, content))
+        batch_meta.append(rel)
+        if len(batch) >= 10:
+            flush_batch()
+    flush_batch()
+    return imported
+
+
+def import_characters_to_lumiverse(state: dict) -> int:
+    char_dir = SHARED / "characters"
+    if not char_dir.is_dir():
+        return 0
+    if not backend_up(LUMIVERSE_PORT):
+        return 0
+
+    opener = lumiverse_opener()
+    if not opener:
+        return 0
+
+    pending: list[tuple[str, Path]] = []
+    for path in sorted(char_dir.iterdir()):
+        if not path.is_file():
+            continue
+        ext = path.suffix.lower()
+        if ext not in {".png", ".json", ".charx"}:
+            continue
+        rel = str(path.relative_to(SHARED))
+        sig = file_sig(path)
+        if state["characters"].get(rel) == sig:
+            continue
+        pending.append((rel, path))
+
+    if not pending:
+        return 0
+
+    imported = 0
+    batch: list[tuple[str, bytes]] = []
+    batch_meta: list[str] = []
+
+    def flush_batch() -> None:
+        nonlocal imported, batch, batch_meta
+        if not batch:
+            return
+        url = f"http://127.0.0.1:{LUMIVERSE_PORT}/api/v1/characters/import-bulk"
+        status, payload = multipart_batch(url, batch, opener=opener, fields={"skip_duplicates": "true"})
+        if status >= 400:
+            log(f"lumiverse character batch import failed ({status}): {payload}")
+            batch = []
+            batch_meta = []
+            return
+        results = payload.get("results", []) if isinstance(payload, dict) else []
+        for rel, result in zip(batch_meta, results):
+            if result.get("success") and not result.get("skipped"):
+                state["characters"][rel] = file_sig(SHARED / rel)
+                imported += 1
+                log(f"imported character → lumiverse: {rel}")
+            elif result.get("skipped"):
+                state["characters"][rel] = file_sig(SHARED / rel)
+                log(f"lumiverse skipped duplicate: {rel}")
+            else:
+                log(f"lumiverse import failed for {rel}: {result.get('error', 'unknown')}")
         batch = []
         batch_meta = []
 
@@ -272,7 +566,6 @@ def bulk_import_from_sillytavern_tree(state: dict) -> int:
             "personas": False,
         },
     }
-    # SSE endpoint — read until done event
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
         run_url,
@@ -303,16 +596,30 @@ def bulk_import_from_sillytavern_tree(state: dict) -> int:
 
 def main() -> int:
     log(f"{time.strftime('%Y-%m-%dT%H:%M:%S%z')} syncing shared library")
-    rsync_shared()
     state = load_state()
-    n_chars = import_characters_to_marinara(state)
-    n_worlds = import_lorebooks_to_marinara(state)
-    if n_chars == 0:
-        n_chars = bulk_import_from_sillytavern_tree(state)
+
+    n_export_marinara = export_marinara_to_shared(state)
+    n_export_lumiverse = export_lumiverse_to_shared(state)
+
+    if should_run_import():
+        rsync_shared()
+        n_chars_marinara = import_characters_to_marinara(state)
+        n_chars_lumiverse = import_characters_to_lumiverse(state)
+        n_worlds = import_lorebooks_to_marinara(state)
+        if n_chars_marinara == 0:
+            n_chars_marinara = bulk_import_from_sillytavern_tree(state)
+    else:
+        n_chars_marinara = 0
+        n_chars_lumiverse = 0
+        n_worlds = 0
+
     save_state(state)
-    if backend_up(LUMIVERSE_PORT):
-        log(f"lumiverse staging ready at {STAGING_LUMIVERSE / 'characters'} (import via UI: Characters → Import)")
-    log(f"done — marinara: +{n_chars} characters, +{n_worlds} lorebooks")
+    log(
+        "done — "
+        f"exported: marinara +{n_export_marinara}, lumiverse +{n_export_lumiverse}; "
+        f"imported: marinara +{n_chars_marinara}, lumiverse +{n_chars_lumiverse}, "
+        f"lorebooks +{n_worlds}"
+    )
     return 0
 
 
