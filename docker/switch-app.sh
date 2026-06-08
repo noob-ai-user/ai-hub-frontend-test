@@ -17,9 +17,23 @@ case "${APP}" in
   *) echo "unknown app: ${APP}" >&2; exit 1 ;;
 esac
 
+PREV_APP=""
+if [[ -f "${DATA_ROOT}/.active_app" ]]; then
+  PREV_APP="$(cat "${DATA_ROOT}/.active_app")"
+fi
+
+# Update routing target immediately — hub-gateway reads this per request.
+echo "${APP}" > "${DATA_ROOT}/.active_app"
+echo "[hub] routing → ${APP}" >&2
+
+if [[ "${HUB_ROUTING_ONLY:-}" == "1" ]]; then
+  exit 0
+fi
+
+# Serialize heavy work (export / restart / sync) but never block routing updates.
 exec 9>"${LOCK_FILE}"
-if ! flock -n 9; then
-  echo "[hub] switch already in progress — skip" >&2
+if ! flock -w 15 9; then
+  echo "[hub] sync queue busy — routing already ${APP}" >&2
   exit 0
 fi
 
@@ -36,19 +50,12 @@ port_up() {
   (echo >/dev/tcp/127.0.0.1/"${port}") >/dev/null 2>&1
 }
 
-PREV_APP=""
-if [[ -f "${DATA_ROOT}/.active_app" ]]; then
-  PREV_APP="$(cat "${DATA_ROOT}/.active_app")"
-fi
-
 PORT="$(port_for "${APP}")"
 
 # Export from the app we're leaving.
 if [[ -n "${PREV_APP}" && "${PREV_APP}" != "${APP}" ]]; then
   HUB_SYNC_EXPORT="${PREV_APP}" python3 /opt/hub/scripts/hub-sync-import.py 2>&1 || true
 fi
-
-echo "${APP}" > "${DATA_ROOT}/.active_app"
 
 # Ensure all backends are up (start any that crashed).
 /opt/hub/docker/start-all-apps.sh 2>&1 || true
