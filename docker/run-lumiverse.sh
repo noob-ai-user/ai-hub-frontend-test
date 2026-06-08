@@ -16,7 +16,7 @@ export TRUST_ANY_ORIGIN=true
 # BetterAuth must use the public HTTPS URL (not localhost) behind HF proxy.
 resolved="$(bash /opt/hub/docker/resolve-public-origin.sh || true)"
 if [[ -n "${resolved}" ]]; then
-  export AUTH_BASE_URL="${resolved}"
+  export AUTH_BASE_URL="${resolved%/}/apps/lumiverse"
   echo "[lumiverse] AUTH_BASE_URL=${AUTH_BASE_URL}" >&2
 else
   echo "[lumiverse] WARN: login may fail — set PUBLIC_ORIGIN=https://YOUR-SPACE.hf.space in HF Secrets" >&2
