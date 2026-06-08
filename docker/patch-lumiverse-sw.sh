@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Lumiverse registers a PWA service worker that hijacks navigations to /hub
 # and serves cached index.html → React Router 404. In hub mode we replace it.
-set -uo pipefail
+set -euo pipefail
 
 DIST="/apps/lumiverse/frontend/dist"
 SW="${DIST}/sw.js"
@@ -12,7 +12,6 @@ if [[ ! -d "${DIST}" ]]; then
   exit 0
 fi
 
-# Minimal SW: no navigation caching; clears old workbox caches on activate.
 if [[ -f "${SW}" ]]; then
   cat > "${SW}" <<'EOF'
 /* AI Hub: Lumiverse PWA disabled — prevents /hub navigation hijack */
@@ -42,26 +41,26 @@ path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
 original = text
 
-# Vite PWA inline registration blocks
+# Vite PWA inline registration (id may be vite-plugin-pwa:inline-sw)
 text = re.sub(
-    r"<script[^>]*id=[\"']vite-plugin-pwa[^\"']*[\"'][^>]*>.*?</script>",
+    r"<script[^>]*vite-plugin-pwa[^>]*>.*?</script>",
     "<!-- hub: PWA registration removed -->",
     text,
     flags=re.DOTALL | re.IGNORECASE,
 )
 
-# Standalone registerSW / serviceWorker.register snippets (built bundles)
+# Any serviceWorker.register(...) one-liner left in HTML
 text = re.sub(
-    r"if\s*\(\s*[\"']serviceWorker[\"']\s+in\s+navigator\s*\)\s*\{[^}]*register\([^)]*\)[^}]*\}",
-    "/* hub: service worker registration removed */",
+    r"<script[^>]*>\s*if\s*\(\s*['\"]serviceWorker['\"]\s+in\s+navigator\s*\)[^<]*</script>",
+    "<!-- hub: service worker registration removed -->",
     text,
-    flags=re.DOTALL,
+    flags=re.DOTALL | re.IGNORECASE,
 )
 
 if text != original:
     path.write_text(text, encoding="utf-8")
     print("[hub] stripped PWA registration from lumiverse index.html", flush=True)
 else:
-    print("[hub] lumiverse index.html unchanged (no inline PWA block found)", flush=True)
+    print("[hub] lumiverse index.html unchanged (no PWA block found)", flush=True)
 PY
 fi
