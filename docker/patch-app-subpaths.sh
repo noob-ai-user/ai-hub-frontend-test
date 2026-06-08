@@ -117,6 +117,7 @@ for path in root.rglob("*"):
             text = rewrite_static(text)
         elif name.endswith((".js", ".mjs")):
             text = rewrite_api_js(text)
+            text = rewrite_static(text)
             if prefix.endswith("/lumiverse"):
                 text = rewrite_router_basename(text)
         if text != original:
