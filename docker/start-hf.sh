@@ -54,7 +54,7 @@ echo "[hub] starting all frontends (always-on)" >&2
 /opt/hub/docker/start-all-apps.sh 2>&1 || echo "[hub] warn: start-all-apps" >&2
 
 echo "[hub] routing traffic to: ${ACTIVE}" >&2
-/opt/hub/docker/switch-app.sh "${ACTIVE}" 2>&1 || echo "[hub] warn: switch-app" >&2
+HUB_SKIP_SYNC=1 /opt/hub/docker/switch-app.sh "${ACTIVE}" 2>&1 || echo "[hub] warn: switch-app" >&2
 
 case "${ACTIVE}" in
   sillytavern) BACKEND_PORT="${ST_PORT:-8000}" ;;
@@ -93,4 +93,5 @@ fi
 (while true; do sleep 300; /opt/hub/scripts/sync-shared-data.sh || true; done) >&2 &
 
 echo "[hub] nginx on :${HUB_PORT:-7860}" >&2
+( sleep 8; /opt/hub/scripts/sync-shared-data.sh 2>&1 || echo "[hub] warn: post-boot sync" >&2 ) >&2 &
 exec nginx -c /opt/hub/docker/nginx.conf -g 'daemon off;'
