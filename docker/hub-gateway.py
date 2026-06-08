@@ -2,6 +2,7 @@
 """HF public gateway on :7860 — parallel apps via /apps/{name}/ with base-href injection."""
 from __future__ import annotations
 
+import gzip
 import http.client
 import json
 import os
@@ -111,20 +112,80 @@ def app_from_origin(origin: str) -> str | None:
     return None
 
 
-def inject_base_href(body: bytes, prefix: str) -> bytes:
-    """Force /assets and /api requests through the app prefix (fixes multi-tab collisions)."""
+HUB_API_PREFIXES = ("/api/hub", "/api/active", "/api/ready", "/api/debug", "/api/sync")
+
+
+def decompress_body(data: bytes, encoding: str | None) -> bytes:
+    if encoding and "gzip" in encoding.lower():
+        try:
+            return gzip.decompress(data)
+        except OSError:
+            pass
+    return data
+
+
+def fix_base_href(text: str, prefix: str) -> str:
     tag = f'<base href="{prefix}/">'
-    try:
-        text = body.decode("utf-8")
-    except UnicodeDecodeError:
-        return body
     if re.search(r"<base\s", text, re.I):
-        return body
+        return re.sub(
+            r"<base\s+href=[\"'][^\"']*[\"']\s*/?\s*>",
+            tag,
+            text,
+            count=1,
+            flags=re.I,
+        )
     head = re.search(r"<head([^>]*)>", text, re.I)
     if head:
         pos = head.end()
-        return (text[:pos] + f"\n  {tag}" + text[pos:]).encode("utf-8")
-    return (tag + text).encode("utf-8")
+        return text[:pos] + f"\n  {tag}" + text[pos:]
+    return tag + text
+
+
+def rewrite_root_paths(text: str, prefix: str) -> str:
+    """Rewrite root-absolute URLs — HTML <base> does NOT affect paths starting with /."""
+
+    def skip(path: str) -> bool:
+        return path.startswith(prefix + "/") or path.startswith("//") or any(
+            path.startswith(h) for h in HUB_API_PREFIXES
+        )
+
+    def repl_quoted(match: re.Match[str]) -> str:
+        quote, path = match.group(1), match.group(2)
+        if skip(path):
+            return match.group(0)
+        return f"{quote}{prefix}{path}{quote}"
+
+    text = re.sub(r'(["\'])(/(?!/)[^"\'\\]*)', repl_quoted, text)
+    text = re.sub(
+        r'(\bimport\s*\(\s*)(["\'])(/(?!/)[^"\'\\]*)',
+        lambda m: f"{m.group(1)}{m.group(2)}{prefix}{m.group(3)}",
+        text,
+    )
+    text = re.sub(
+        r'(\bnew URL\s*\(\s*)(["\'])(/(?!/)[^"\'\\]*)',
+        lambda m: f"{m.group(1)}{m.group(2)}{prefix}{m.group(3)}",
+        text,
+    )
+    return text
+
+
+def rewrite_app_body(data: bytes, content_type: str, prefix: str) -> bytes:
+    if not prefix:
+        return data
+    ct = content_type.lower()
+    if not any(
+        token in ct
+        for token in ("text/html", "javascript", "text/css", "json", "manifest")
+    ):
+        return data
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data
+    if "text/html" in ct:
+        text = fix_base_href(text, prefix)
+    text = rewrite_root_paths(text, prefix)
+    return text.encode("utf-8")
 
 
 def rewrite_location(location: str, prefix: str) -> str:
@@ -157,7 +218,7 @@ def resolve_route(path: str, referer: str, query: str = "", origin: str = "") ->
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "hub-gateway/4"
+    server_version = "hub-gateway/5"
 
     def log_message(self, fmt: str, *args) -> None:
         print(f"[gateway] {self.address_string()} - {fmt % args}", flush=True)
@@ -243,7 +304,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(
                 200,
                 {
-                    "routing": "parallel (/apps/{app}/ + base href injection)",
+                    "routing": "parallel (/apps/{app}/ + URL rewrite)",
                     "active_fallback": active_app(),
                     "apps": probes,
                     "shared_characters": str(DATA_ROOT / "shared" / "characters"),
@@ -326,14 +387,15 @@ class Handler(BaseHTTPRequestHandler):
             resp = conn.getresponse()
             data = resp.read()
             content_type = resp.getheader("Content-Type", "")
-
-            if prefix and "text/html" in content_type.lower():
-                data = inject_base_href(data, prefix)
+            content_encoding = resp.getheader("Content-Encoding")
+            data = decompress_body(data, content_encoding)
+            if prefix:
+                data = rewrite_app_body(data, content_type, prefix)
 
             self.send_response(resp.status)
             for key, value in resp.getheaders():
                 lower = key.lower()
-                if lower in HOP_BY_HOP or lower == "content-length":
+                if lower in HOP_BY_HOP or lower in {"content-length", "content-encoding"}:
                     continue
                 if lower == "location" and prefix:
                     value = rewrite_location(value, prefix)
@@ -434,7 +496,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     print(
-        f"[gateway] starting on 0.0.0.0:{HUB_PORT} mode=parallel+basehref "
+        f"[gateway] starting on 0.0.0.0:{HUB_PORT} mode=parallel+rewrite "
         f"prefixes={','.join(APP_PREFIXES.values())}",
         flush=True,
     )
