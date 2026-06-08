@@ -33,6 +33,7 @@ RUN chmod +x /opt/hub/docker/*.sh /opt/hub/scripts/*.sh \
     && chmod +x /opt/hub/docker/start-all-apps.sh \
     && echo 'upstream active_backend { server 127.0.0.1:8000; }' > /opt/hub/docker/upstream.conf \
     && /opt/hub/docker/patch-lumiverse-auth.sh \
+    && /opt/hub/docker/patch-sillytavern-subpaths.sh \
     && /opt/hub/docker/patch-app-subpaths.sh \
     && /opt/hub/docker/patch-lumiverse-sw.sh \
     && /opt/hub/docker/patch-marinara-sw.sh
