@@ -123,11 +123,20 @@ class Handler(BaseHTTPRequestHandler):
             if app not in APP_PORTS:
                 self._json(400, {"error": "unknown app"})
                 return
-            threading.Thread(
-                target=self._run_switch_async,
-                args=(app,),
-                daemon=True,
-            ).start()
+            # Always-on mode: switch is nginx reload only — run synchronously.
+            try:
+                proc = subprocess.run(
+                    [SWITCH_SCRIPT, app],
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                    check=False,
+                )
+                if proc.returncode != 0:
+                    tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-3:]
+                    print(f"[hub-api] switch to {app} exit {proc.returncode}: {tail}", flush=True)
+            except Exception as exc:
+                print(f"[hub-api] switch to {app} failed: {exc}", flush=True)
             self._html("switching.html")
             return
 
