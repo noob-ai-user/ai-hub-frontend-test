@@ -5,6 +5,7 @@ echo "[hub] HF start $(date -Is)" >&2
 
 DATA_ROOT="${DATA_ROOT:-/data}"
 export DATA_ROOT
+export PATH="/usr/local/bin:/usr/bin:/bin:${PATH:-}"
 
 mkdir -p "${DATA_ROOT}" "${DATA_ROOT}/.pids" \
   /tmp/nginx/body /tmp/nginx/proxy /tmp/nginx/fastcgi /tmp/nginx/uwsgi /tmp/nginx/scgi 2>/dev/null || true
@@ -42,7 +43,10 @@ for i in $(seq 1 15); do
   sleep 1
 done
 
-echo "[hub] booting frontend: ${ACTIVE}" >&2
+echo "[hub] starting all frontends (always-on)" >&2
+/opt/hub/docker/start-all-apps.sh 2>&1 || echo "[hub] warn: start-all-apps" >&2
+
+echo "[hub] routing traffic to: ${ACTIVE}" >&2
 /opt/hub/docker/switch-app.sh "${ACTIVE}" 2>&1 || echo "[hub] warn: switch-app" >&2
 
 case "${ACTIVE}" in
