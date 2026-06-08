@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""HF public gateway on :7860 — dynamic routing via .active_app (no nginx reload)."""
+"""HF public gateway on :7860 — parallel apps via /apps/{name}/ + Referer routing."""
 from __future__ import annotations
 
 import http.client
@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 DATA_ROOT = Path(os.environ.get("DATA_ROOT", "/data"))
 PUBLIC = Path("/opt/hub/public")
-SWITCH_SCRIPT = "/opt/hub/docker/switch-app.sh"
+SYNC_SCRIPT = "/opt/hub/scripts/sync-shared-data.sh"
 ACTIVE_FILE = DATA_ROOT / ".active_app"
 HUB_PORT = int(os.environ.get("HUB_PORT", "7860"))
 
@@ -23,6 +23,24 @@ PORTS = {
     "sillytavern": int(os.environ.get("ST_PORT", "8000")),
     "lumiverse": int(os.environ.get("LUMIVERSE_PORT", "7861")),
     "marinara": int(os.environ.get("MARINARA_PORT", "7862")),
+}
+
+APP_PREFIXES = {
+    "sillytavern": "/apps/sillytavern",
+    "lumiverse": "/apps/lumiverse",
+    "marinara": "/apps/marinara",
+}
+
+HUB_ONLY_PATHS = {
+    "/api/hub",
+    "/api/hub/",
+    "/api/active",
+    "/api/ready",
+    "/api/debug",
+    "/api/sync",
+    "/hub",
+    "/hub/",
+    "/hub.html",
 }
 
 HOP_BY_HOP = {
@@ -47,13 +65,8 @@ def active_app() -> str:
     return "sillytavern"
 
 
-def set_active_app(app: str) -> None:
-    ACTIVE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    ACTIVE_FILE.write_text(f"{app}\n", encoding="utf-8")
-
-
-def backend_port(app: str | None = None) -> int:
-    return PORTS.get(app or active_app(), PORTS["sillytavern"])
+def backend_port(app: str) -> int:
+    return PORTS.get(app, PORTS["sillytavern"])
 
 
 def port_open(port: int) -> bool:
@@ -64,8 +77,7 @@ def port_open(port: int) -> bool:
         return False
 
 
-def backend_ready(app: str | None = None) -> bool:
-    app = app or active_app()
+def backend_ready(app: str) -> bool:
     port = PORTS.get(app)
     if port is None or not port_open(port):
         return False
@@ -79,18 +91,45 @@ def backend_ready(app: str | None = None) -> bool:
         return port_open(port)
 
 
-def is_hub_api_path(path: str) -> bool:
-    if path in {"/api/hub", "/api/hub/", "/api/health", "/api/active", "/api/ready", "/api/debug", "/api/sync"}:
-        return True
-    return path.startswith("/api/switch/")
+def app_from_referer(referer: str) -> str | None:
+    if not referer:
+        return None
+    for app, prefix in APP_PREFIXES.items():
+        if f"{prefix}/" in referer or referer.rstrip("/").endswith(prefix):
+            return app
+    return None
+
+
+def resolve_route(path: str, referer: str, query: str = "") -> tuple[str, str]:
+    """Return (app_name, backend_path)."""
+    for app, prefix in APP_PREFIXES.items():
+        if path == prefix:
+            return app, "/"
+        if path.startswith(prefix + "/"):
+            return app, path[len(prefix) :] or "/"
+
+    referer_app = app_from_referer(referer)
+    if referer_app:
+        return referer_app, path
+
+    if path == "/":
+        if "logs=" in query:
+            return "sillytavern", path + (f"?{query}" if query else "")
+        return "hub", path
+
+    return active_app(), path
 
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "hub-gateway/2"
+    server_version = "hub-gateway/3"
 
     def log_message(self, fmt: str, *args) -> None:
         print(f"[gateway] {self.address_string()} - {fmt % args}", flush=True)
+
+    def _parsed(self) -> tuple[str, str, str]:
+        parsed = urlparse(self.path)
+        return parsed.path or "/", parsed.query, self.headers.get("Referer", "")
 
     def _send_bytes(self, code: int, body: bytes, content_type: str, extra_headers: dict | None = None) -> None:
         self.send_response(code)
@@ -123,57 +162,38 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    def _run_switch_heavy(self, app: str) -> None:
+    def _run_sync_background(self) -> None:
         try:
-            proc = subprocess.run(
-                [SWITCH_SCRIPT, app],
-                capture_output=True,
-                text=True,
-                timeout=600,
-                check=False,
-            )
-            out = (proc.stdout or proc.stderr or "").strip().splitlines()
-            tail = out[-5:] if out else []
-            if proc.returncode != 0:
-                print(f"[gateway] switch heavy work for {app} exit {proc.returncode}: {tail}", flush=True)
-            else:
-                print(f"[gateway] switch heavy work for {app} done: {tail}", flush=True)
+            subprocess.run([SYNC_SCRIPT], capture_output=True, text=True, timeout=300, check=False)
         except Exception as exc:
-            print(f"[gateway] switch heavy work for {app} failed: {exc}", flush=True)
-
-    def _switch_to(self, app: str) -> None:
-        set_active_app(app)
-        print(f"[gateway] switch to {app} — routing active={active_app()}", flush=True)
-        threading.Thread(target=self._run_switch_heavy, args=(app,), daemon=True).start()
+            print(f"[gateway] background sync failed: {exc}", flush=True)
 
     def _handle_hub_route(self, method: str) -> bool:
-        path = urlparse(self.path).path
+        path, query, _referer = self._parsed()
 
-        if path in {"/api/hub", "/api/hub/", "/hub/", "/hub.html"}:
-            filename = "hub.html" if path == "/hub.html" else "index.html"
-            self._send_html(filename)
-            return True
-
-        if path == "/hub":
-            self._send_html("hub-redirect.html")
-            return True
-
-        if path in {"/sillytavern", "/sillytavern/", "/lumiverse", "/lumiverse/", "/marinara", "/marinara/"}:
-            app = path.strip("/").lower()
-            self._redirect(f"/api/switch/{app}")
-            return True
-
-        if path == "/api/health":
-            self._send_json(200, {"status": "ok", "active": active_app(), "backend_port": backend_port()})
-            return True
+        if path in HUB_ONLY_PATHS:
+            if path in {"/api/hub", "/api/hub/", "/hub/", "/hub.html"}:
+                filename = "hub.html" if path == "/hub.html" else "index.html"
+                self._send_html(filename)
+                return True
+            if path == "/hub":
+                self._send_html("hub-redirect.html")
+                return True
 
         if path == "/api/active":
-            self._send_json(200, {"active": active_app(), "backend_port": backend_port()})
+            self._send_json(
+                200,
+                {
+                    "active": active_app(),
+                    "routing": "parallel",
+                    "apps": {name: prefix for name, prefix in APP_PREFIXES.items()},
+                },
+            )
             return True
 
         if path == "/api/ready":
-            app = active_app()
-            self._send_json(200, {"active": app, "ready": backend_ready(app), "backend_port": backend_port(app)})
+            probes = {name: backend_ready(name) for name in PORTS}
+            self._send_json(200, {"routing": "parallel", "ready": probes})
             return True
 
         if path == "/api/debug":
@@ -181,62 +201,67 @@ class Handler(BaseHTTPRequestHandler):
             for name, port in PORTS.items():
                 probes[name] = {
                     "port": port,
+                    "prefix": APP_PREFIXES[name],
                     "port_open": port_open(port),
                     "http_ready": backend_ready(name),
                 }
             self._send_json(
                 200,
                 {
-                    "active": active_app(),
-                    "backend_port": backend_port(),
-                    "active_ready": backend_ready(),
-                    "gateway": f"0.0.0.0:{HUB_PORT}",
-                    "routing": "dynamic (.active_app per request)",
-                    "backends": probes,
+                    "routing": "parallel (/apps/{app}/ + Referer)",
+                    "active_fallback": active_app(),
+                    "apps": probes,
+                    "shared_characters": str(DATA_ROOT / "shared" / "characters"),
                 },
             )
             return True
 
         if path == "/api/sync" and method == "GET":
-            try:
-                proc = subprocess.run(
-                    ["/opt/hub/scripts/sync-shared-data.sh"],
-                    capture_output=True,
-                    text=True,
-                    timeout=300,
-                    check=False,
-                )
-                lines = (proc.stdout or proc.stderr or "").strip().splitlines()
-                tail = lines[-8:] if lines else []
-                self._send_json(
-                    200,
-                    {"ok": proc.returncode == 0, "exit_code": proc.returncode, "log": tail},
-                )
-            except Exception as exc:
-                self._send_json(500, {"ok": False, "error": str(exc)})
+            threading.Thread(target=self._run_sync_background, daemon=True).start()
+            self._send_json(200, {"ok": True, "message": "sync started in background"})
+            return True
+
+        # Legacy shortcuts → prefixed app URLs (new tab friendly).
+        legacy = {
+            "/sillytavern": "/apps/sillytavern/",
+            "/sillytavern/": "/apps/sillytavern/",
+            "/lumiverse": "/apps/lumiverse/",
+            "/lumiverse/": "/apps/lumiverse/",
+            "/marinara": "/apps/marinara/",
+            "/marinara/": "/apps/marinara/",
+        }
+        if path in legacy:
+            self._redirect(legacy[path])
             return True
 
         if path.startswith("/api/switch/") and method == "GET":
             app = path.rsplit("/", 1)[-1].lower()
-            if app not in PORTS:
-                self._send_json(400, {"error": "unknown app"})
+            if app in APP_PREFIXES:
+                self._redirect(f"{APP_PREFIXES[app]}/")
                 return True
-            self._switch_to(app)
-            self._send_html("switching.html")
+            self._send_json(400, {"error": "unknown app"})
+            return True
+
+        if path == "/" and method == "GET" and "logs=" not in query:
+            self._send_html("index.html")
             return True
 
         return False
 
-    def _build_forward_headers(self) -> dict[str, str]:
+    def _build_forward_headers(self, app: str, backend_path: str) -> dict[str, str]:
         headers: dict[str, str] = {}
         for key, value in self.headers.items():
             lower = key.lower()
             if lower in SKIP_REQUEST_HEADERS:
                 continue
             headers[key] = value
+
         host = self.headers.get("Host", "")
-        if host:
+        prefix = APP_PREFIXES.get(app, "")
+        if host and prefix:
             headers["X-Forwarded-Host"] = host
+            headers["X-Forwarded-Prefix"] = prefix
+            headers["X-Hub-App"] = app
         headers["X-Forwarded-Proto"] = os.environ.get("FORWARDED_PROTO", "https")
         headers["X-Real-IP"] = self.client_address[0]
         prior = self.headers.get("X-Forwarded-For", "")
@@ -245,18 +270,22 @@ class Handler(BaseHTTPRequestHandler):
         return headers
 
     def _proxy_http(self, method: str) -> None:
-        port = backend_port()
-        parsed = urlparse(self.path)
-        target_path = parsed.path or "/"
-        if parsed.query:
-            target_path = f"{target_path}?{parsed.query}"
+        path, query, referer = self._parsed()
+        app, backend_path = resolve_route(path, referer, query)
+        if app == "hub":
+            self._send_html("index.html")
+            return
 
+        if query and "?" not in backend_path:
+            backend_path = f"{backend_path}?{query}"
+
+        port = backend_port(app)
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3600)
         length = int(self.headers.get("Content-Length", "0") or "0")
         body = self.rfile.read(length) if length else None
 
-        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3600)
         try:
-            conn.request(method, target_path, body=body, headers=self._build_forward_headers())
+            conn.request(method, backend_path, body=body, headers=self._build_forward_headers(app, backend_path))
             resp = conn.getresponse()
             self.send_response(resp.status)
             for key, value in resp.getheaders():
@@ -269,26 +298,28 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
         except Exception as exc:
-            print(f"[gateway] proxy {method} → :{port}{target_path} failed: {exc}", flush=True)
-            self._send_json(502, {"error": "backend unavailable", "active": active_app(), "port": port})
+            print(f"[gateway] proxy {method} {app} → :{port}{backend_path} failed: {exc}", flush=True)
+            self._send_json(502, {"error": "backend unavailable", "app": app, "port": port})
         finally:
             conn.close()
 
     def _proxy_websocket(self) -> None:
-        port = backend_port()
-        parsed = urlparse(self.path)
-        target_path = parsed.path or "/"
-        if parsed.query:
-            target_path = f"{target_path}?{parsed.query}"
+        path, query, referer = self._parsed()
+        app, backend_path = resolve_route(path, referer, query)
+        if app == "hub":
+            self.send_error(400, "WebSocket not supported on hub route")
+            return
+        if query and "?" not in backend_path:
+            backend_path = f"{backend_path}?{query}"
 
-        lines = [f"{self.command} {target_path} {self.request_version}"]
+        port = backend_port(app)
+        lines = [f"{self.command} {backend_path} {self.request_version}"]
         for key, value in self.headers.items():
             lower = key.lower()
             if lower == "host":
                 value = f"127.0.0.1:{port}"
             lines.append(f"{key}: {value}")
-        lines.append("")
-        lines.append("")
+        lines.extend(["", ""])
         payload = "\r\n".join(lines).encode("latin-1", errors="replace")
 
         client = self.connection
@@ -307,7 +338,7 @@ class Handler(BaseHTTPRequestHandler):
                     other = backend if sock is client else client
                     other.sendall(chunk)
         except Exception as exc:
-            print(f"[gateway] websocket → :{port}{target_path} failed: {exc}", flush=True)
+            print(f"[gateway] websocket {app} → :{port}{backend_path} failed: {exc}", flush=True)
         finally:
             backend.close()
 
@@ -357,9 +388,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    app = active_app()
     print(
-        f"[gateway] starting on 0.0.0.0:{HUB_PORT} active={app} backend=:{backend_port(app)}",
+        f"[gateway] starting on 0.0.0.0:{HUB_PORT} mode=parallel "
+        f"prefixes={','.join(APP_PREFIXES.values())}",
         flush=True,
     )
     server = ThreadingHTTPServer(("0.0.0.0", HUB_PORT), Handler)
