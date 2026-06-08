@@ -39,7 +39,56 @@ LEGACY_HUB_RE = re.compile(r"^hub_(st|marinara|lumiverse)_[A-Za-z0-9]{6,8}_", re
 CANONICAL_HUB_RE = re.compile(r"^hub_(marinara|lumiverse)_[a-z][a-z0-9_]*\.png$", re.I)
 CANONICAL_ST_HUB_RE = re.compile(r"^hub_st_[a-z][a-z0-9_]*\.png$", re.I)
 ST_ID_PREFIX_RE = re.compile(r"^[A-Za-z0-9]{6,12}\s+")
-ID_SLUG_RE = re.compile(r"^[a-z0-9]{6,12}_")
+ST_RANDOM_ID_SLUG_RE = re.compile(r"^([a-z0-9]{6,12})_")
+
+
+def is_random_st_id_slug(slug: str) -> bool:
+    """True when slug starts with an ST random ID prefix (e.g. a1b2c3d4_name).
+
+    Word slugs like default_seraphina must not match — 'default' has no digits.
+    """
+    m = ST_RANDOM_ID_SLUG_RE.match(slug)
+    if not m:
+        return False
+    return any(ch.isdigit() for ch in m.group(1))
+
+
+def resolve_public_origin() -> str:
+    origin = (os.environ.get("PUBLIC_ORIGIN") or "").strip().rstrip("/")
+    if origin:
+        if not origin.startswith(("http://", "https://")):
+            origin = f"https://{origin}"
+        return origin
+    space_host = (os.environ.get("SPACE_HOST") or "").strip().rstrip("/")
+    if space_host:
+        space_host = space_host.removeprefix("https://").removeprefix("http://")
+        return f"https://{space_host}"
+    space_id = (os.environ.get("SPACE_ID") or "").strip()
+    if space_id:
+        return f"https://{space_id.replace('/', '-')}.hf.space"
+    return ""
+
+
+def extract_bearer_token(payload: object, set_cookies: list[str]) -> str | None:
+    if isinstance(payload, dict):
+        token = payload.get("token")
+        if isinstance(token, str) and token.strip():
+            return token.strip()
+        session = payload.get("session")
+        if isinstance(session, dict):
+            session_token = session.get("token")
+            if isinstance(session_token, str) and session_token.strip():
+                return session_token.strip()
+    for header in set_cookies:
+        for part in header.split(","):
+            part = part.strip()
+            for marker in (
+                "better-auth.session_token=",
+                "__Secure-better-auth.session_token=",
+            ):
+                if marker in part:
+                    return part.split(marker, 1)[1].split(";", 1)[0].strip()
+    return None
 
 
 def log(msg: str) -> None:
@@ -196,6 +245,7 @@ def multipart_batch(
     files: list[tuple[str, bytes]],
     opener: urllib.request.OpenerDirector | None = None,
     fields: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> tuple[int, object]:
     boundary = f"hubsync-{uuid4().hex}"
     parts: list[bytes] = []
@@ -216,10 +266,16 @@ def multipart_batch(
     parts.append(f"--{boundary}--\r\n".encode())
     body = b"".join(parts)
 
+    req_headers = {
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "Accept": "application/json",
+    }
+    if headers:
+        req_headers.update(headers)
     req = urllib.request.Request(
         url,
         data=body,
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}", "Accept": "application/json"},
+        headers=req_headers,
         method="POST",
     )
     open_fn = opener.open if opener else urllib.request.urlopen
@@ -236,7 +292,7 @@ def multipart_batch(
         return exc.code, payload
 
 
-def lumiverse_opener() -> urllib.request.OpenerDirector | None:
+def lumiverse_session() -> tuple[urllib.request.OpenerDirector, dict[str, str]] | None:
     if not OWNER_PASSWORD:
         log("lumiverse sync skipped — set OWNER_PASSWORD (your Lumiverse login password) in HF Secrets")
         return None
@@ -245,17 +301,57 @@ def lumiverse_opener() -> urllib.request.OpenerDirector | None:
     jar = CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
     base = f"http://127.0.0.1:{LUMIVERSE_PORT}"
-    status, payload = http_json(
-        "POST",
+    public_origin = resolve_public_origin()
+    sign_in_headers: dict[str, str] = {"Accept": "application/json", "Content-Type": "application/json"}
+    if public_origin:
+        sign_in_headers["Origin"] = public_origin
+        try:
+            host = public_origin.split("://", 1)[1]
+            sign_in_headers["X-Forwarded-Host"] = host
+            sign_in_headers["X-Forwarded-Proto"] = "https"
+        except IndexError:
+            sign_in_headers["Origin"] = base
+    else:
+        sign_in_headers["Origin"] = base
+
+    body = json.dumps({"username": username, "password": OWNER_PASSWORD}).encode("utf-8")
+    req = urllib.request.Request(
         f"{base}/api/auth/sign-in/username",
-        {"username": username, "password": OWNER_PASSWORD},
-        headers={"Origin": base},
-        opener=opener,
+        data=body,
+        headers=sign_in_headers,
+        method="POST",
     )
-    if status >= 400:
-        log(f"lumiverse sign-in failed for user '{username}' ({status}): {payload}")
+    try:
+        with opener.open(req, timeout=120) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            payload = json.loads(raw) if raw else {}
+            set_cookies = []
+            if hasattr(resp.headers, "get_all"):
+                set_cookies = list(resp.headers.get_all("Set-Cookie") or [])
+            elif resp.headers.get("Set-Cookie"):
+                set_cookies = [resp.headers.get("Set-Cookie", "")]
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            payload = json.loads(raw) if raw else {"error": raw}
+        except json.JSONDecodeError:
+            payload = {"error": raw or exc.reason}
+        log(f"lumiverse sign-in failed for user '{username}' ({exc.code}): {payload}")
         return None
-    return opener
+    except Exception as exc:
+        log(f"lumiverse sign-in error for user '{username}': {exc}")
+        return None
+
+    auth_headers: dict[str, str] = {}
+    token = extract_bearer_token(payload, set_cookies)
+    if token:
+        auth_headers["Authorization"] = f"Bearer {token}"
+    else:
+        log(
+            f"lumiverse sign-in for '{username}' ok but no bearer token — "
+            "falling back to session cookies"
+        )
+    return opener, auth_headers
 
 
 def marinara_character_names() -> set[str]:
@@ -290,7 +386,7 @@ def char_name_from_path(path: Path) -> str:
         parts = stem.split("_", 2)
         if len(parts) >= 3:
             slug = parts[2]
-            if parts[1] in {"marinara", "lumiverse", "st"} and not ID_SLUG_RE.match(slug):
+            if parts[1] in {"marinara", "lumiverse", "st"} and not is_random_st_id_slug(slug):
                 return slug.replace("_", " ")
     return st_display_name(stem)
 
@@ -307,7 +403,7 @@ def is_valid_shared_card(name: str) -> bool:
         return True
     if CANONICAL_ST_HUB_RE.match(name):
         slug = name[len("hub_st_") : -4]
-        return not ID_SLUG_RE.match(slug)
+        return not is_random_st_id_slug(slug)
     return False
 
 
@@ -451,12 +547,18 @@ def export_lumiverse_to_shared(state: dict) -> int:
     if not backend_up(LUMIVERSE_PORT):
         return 0
 
-    opener = lumiverse_opener()
-    if not opener:
+    session = lumiverse_session()
+    if not session:
         return 0
+    opener, auth_headers = session
 
     base = f"http://127.0.0.1:{LUMIVERSE_PORT}"
-    status, payload = http_json("GET", f"{base}/api/v1/characters/?limit=500&offset=0", opener=opener)
+    status, payload = http_json(
+        "GET",
+        f"{base}/api/v1/characters/?limit=500&offset=0",
+        headers=auth_headers,
+        opener=opener,
+    )
     if status >= 400 or not isinstance(payload, dict):
         log(f"lumiverse list failed ({status}): {payload}")
         return 0
@@ -490,6 +592,7 @@ def export_lumiverse_to_shared(state: dict) -> int:
 
         png_status, png_bytes = http_bytes(
             f"{base}/api/v1/characters/{info['char_id']}/export?format=png",
+            headers=auth_headers,
             opener=opener,
         )
         if png_status >= 400 or not png_bytes:
@@ -671,9 +774,10 @@ def import_characters_to_lumiverse(state: dict) -> int:
     if not backend_up(LUMIVERSE_PORT):
         return 0
 
-    opener = lumiverse_opener()
-    if not opener:
+    session = lumiverse_session()
+    if not session:
         return 0
+    opener, auth_headers = session
 
     pending: list[tuple[str, Path]] = []
     for path in sorted(char_dir.iterdir()):
@@ -704,7 +808,11 @@ def import_characters_to_lumiverse(state: dict) -> int:
             return
         url = f"http://127.0.0.1:{LUMIVERSE_PORT}/api/v1/characters/import-bulk"
         status, payload = multipart_batch(
-            url, batch, opener=opener, fields={"skip_duplicates": "true"}
+            url,
+            batch,
+            opener=opener,
+            fields={"skip_duplicates": "true"},
+            headers=auth_headers,
         )
         if status >= 400:
             log(f"lumiverse character batch import failed ({status}): {payload}")
