@@ -12,6 +12,7 @@ chmod -R u+rwX "${DATA_ROOT}" /tmp/nginx 2>/dev/null || true
 
 /opt/hub/docker/init-data-dirs.sh 2>&1 || echo "[hub] warn: init-data-dirs" >&2
 /opt/hub/docker/link-shared-data.sh 2>&1 || true
+/opt/hub/docker/init-sillytavern-data.sh 2>&1 || echo "[hub] warn: init-sillytavern-data" >&2
 /opt/hub/scripts/sync-shared-data.sh 2>&1 || true
 
 ACTIVE="${ACTIVE_APP:-sillytavern}"
