@@ -155,15 +155,15 @@ def rewrite_root_paths(text: str, prefix: str) -> str:
             return match.group(0)
         return f"{quote}{prefix}{path}{quote}"
 
-    text = re.sub(r'(["\'])(/(?!/)[^"\'\\]*)', repl_quoted, text)
+    text = re.sub(r'(["\'])(/(?!/)[^"\'\\]*)\1', repl_quoted, text)
     text = re.sub(
-        r'(\bimport\s*\(\s*)(["\'])(/(?!/)[^"\'\\]*)',
-        lambda m: f"{m.group(1)}{m.group(2)}{prefix}{m.group(3)}",
+        r'(\bimport\s*\(\s*)(["\'])(/(?!/)[^"\'\\]*)\2',
+        lambda m: f"{m.group(1)}{m.group(2)}{prefix}{m.group(3)}{m.group(2)}",
         text,
     )
     text = re.sub(
-        r'(\bnew URL\s*\(\s*)(["\'])(/(?!/)[^"\'\\]*)',
-        lambda m: f"{m.group(1)}{m.group(2)}{prefix}{m.group(3)}",
+        r'(\bnew URL\s*\(\s*)(["\'])(/(?!/)[^"\'\\]*)\2',
+        lambda m: f"{m.group(1)}{m.group(2)}{prefix}{m.group(3)}{m.group(2)}",
         text,
     )
     return text
