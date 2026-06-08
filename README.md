@@ -70,6 +70,15 @@ Do **not** paste only the Dockerfile without `README.md` — HF needs the yaml f
 **Quick switch links** (work even when the launcher page doesn’t):
 
 - SillyTavern: `/api/switch/sillytavern` (first launch can take **1–3 minutes** — wait on the “Switching…” page)
+
+### SillyTavern shows “settings couldn't be loaded”?
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| UI stuck on **Initializing**, then settings error | `/data/sillytavern/data/default-user/settings.json` was never seeded | **Factory rebuild** after pulling latest hub; init script seeds `settings.json` + preset folders on boot |
+| `/api/settings/get` returns **500** | Same — missing `settings.json` or preset directories | Rebuild; or delete `/data/sillytavern/data/default-user/content.log` and restart so defaults re-copy |
+
+No SillyTavern fork is required — this is user-data seeding, not a missing npm package.
 - Lumiverse: `/api/switch/lumiverse`
 - Marinara: `/api/switch/marinara`
 
