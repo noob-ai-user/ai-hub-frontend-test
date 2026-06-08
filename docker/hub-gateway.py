@@ -63,8 +63,9 @@ MAX_JS_REWRITE_BYTES = int(os.environ.get("MAX_JS_REWRITE_BYTES", "524288"))
 # Markers that build-time patch scripts (docker/patch-*-subpaths.sh) have run.
 BUILD_PATCH_MARKERS: dict[str, tuple[str, ...]] = {
     "sillytavern": ("/apps/sillytavern/api/", "/apps/sillytavern/csrf-token"),
-    "lumiverse": ("/apps/lumiverse/api/v1", "basename:e=`/apps/lumiverse`"),
-    "marinara": ("/apps/marinara/api", 'const At="/apps/marinara/api"'),
+    # Require API base marker — basename alone is not enough (v8 skipped /api rewrite).
+    "lumiverse": ("qs=`/apps/lumiverse/api/v1`",),
+    "marinara": ("qs=`/apps/marinara/api/v1`", 'const At="/apps/marinara/api"'),
 }
 
 
@@ -286,6 +287,18 @@ def patch_lumiverse_router_basename(text: str, prefix: str) -> str:
     return text
 
 
+def patch_lumiverse_js(text: str, prefix: str) -> str:
+    """Apply basename + /api* prefixing for Lumiverse entry/lazy chunks."""
+    text = patch_lumiverse_router_basename(text, prefix)
+    api_marker = f"qs=`{prefix}/api/v1`"
+    if api_marker not in text:
+        text = rewrite_js_api_paths(text, prefix)
+        # Interpolated CSS url() templates: url(${q}/api/v1/theme-assets/...)
+        text = text.replace("/api/v1/theme-assets", f"{prefix}/api/v1/theme-assets")
+        text = text.replace("/api/v1/image-gen", f"{prefix}/api/v1/image-gen")
+    return text
+
+
 def rewrite_app_body(data: bytes, content_type: str, prefix: str, app: str = "") -> bytes:
     if not prefix:
         return data
@@ -301,9 +314,10 @@ def rewrite_app_body(data: bytes, content_type: str, prefix: str, app: str = "")
         return data
     if "javascript" in ct:
         if app == "lumiverse":
-            patched = patch_lumiverse_router_basename(text, prefix)
+            patched = patch_lumiverse_js(text, prefix)
             if patched != text:
                 return patched.encode("utf-8")
+            return data
         if js_already_build_patched(text, app):
             return data
         if len(data) > MAX_JS_REWRITE_BYTES:
@@ -351,7 +365,7 @@ def resolve_route(path: str, referer: str, query: str = "", origin: str = "") ->
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "hub-gateway/8"
+    server_version = "hub-gateway/9"
 
     def log_message(self, fmt: str, *args) -> None:
         print(f"[gateway] {self.address_string()} - {fmt % args}", flush=True)
