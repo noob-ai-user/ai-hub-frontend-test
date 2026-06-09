@@ -79,8 +79,11 @@ index_path, content_dir, user_dir = map(pathlib.Path, sys.argv[1:4])
 
 TYPE_TARGETS = {
     "settings": ".",
-    "character": "characters",
-    "sprites": "characters",
+    # "character" and "sprites" intentionally skipped —
+    # characters live ONLY in /data/shared/characters (HF free tier mount).
+    # Seeding them here causes duplication when hub-sync-import runs.
+    # "character": "characters",
+    # "sprites": "characters",
     "background": "backgrounds",
     "world": "worlds",
     "avatar": "User Avatars",

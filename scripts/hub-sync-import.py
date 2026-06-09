@@ -475,14 +475,42 @@ def is_valid_shared_card(name: str) -> bool:
 
 
 def is_importable_global(name: str) -> bool:
-    return is_global_canonical(name)
+    if not is_global_canonical(name):
+        return False
+    # A hub_default_* asset that has a canonical hub_* sibling is redundant
+    slug = global_slug_from_filename(name)
+    if slug:
+        canon = canonical_slug(slug)
+        if canon != slug:
+            # This is an aliased form (e.g. hub_default_seraphina) —
+            # only importable if the canonical form is missing.
+            return False  # skip alias — canonical carries the authority
+    return True
 
 
 SLUG_ALIASES = {"default_seraphina": "seraphina"}
 
+# Aliases in reversed direction for lookup: canonical → aliased forms
+ALIAS_SLUGS = {v: k for k, v in SLUG_ALIASES.items()}
+
 
 def normalize_slug(slug: str) -> str:
     return SLUG_ALIASES.get(slug, slug)
+
+
+def canonical_slug(slug: str) -> str:
+    """Return the canonical slug for a given slug (resolve aliases)."""
+    return SLUG_ALIASES.get(slug, slug)
+
+
+def all_alias_slugs(slug: str) -> set[str]:
+    """Return {slug} plus any alternate slugs that resolve to the same canonical."""
+    canonical = canonical_slug(slug)
+    result = {canonical}
+    for alias, canon in SLUG_ALIASES.items():
+        if canon == canonical:
+            result.add(alias)
+    return result
 
 
 def migrate_legacy_canonicals(state: dict) -> int:
@@ -555,9 +583,37 @@ def cleanup_shared_junk(state: dict) -> int:
     if not char_dir.is_dir():
         return 0
     removed = 0
+
+    # Step 1 — remove alias cards when their canonical counterpart exists
+    canonical_files: dict[str, Path] = {}
+    for path in char_dir.iterdir():
+        if not path.is_file() or path.name.startswith("."):
+            continue
+        if is_global_canonical(path.name):
+            slug = global_slug_from_filename(path.name)
+            if slug:
+                canon = canonical_slug(slug)
+                if canon == slug:
+                    canonical_files[canon] = path
+
     for path in list(char_dir.iterdir()):
         if not path.is_file() or path.name.startswith("."):
             continue
+        if is_global_canonical(path.name):
+            slug = global_slug_from_filename(path.name)
+            if slug:
+                canon = canonical_slug(slug)
+                if canon != slug and canon in canonical_files:
+                    # This is an alias card — canonical already exists
+                    try:
+                        path.unlink()
+                        state["characters"].pop(f"characters/{path.name}", None)
+                        removed += 1
+                        log(f"removed alias duplicate from shared: characters/{path.name} (canonical: hub_{canon}.png)")
+                    except OSError as exc:
+                        log(f"alias cleanup failed for {path.name}: {exc}")
+                    continue
+
         if is_valid_shared_card(path.name):
             continue
         try:
@@ -903,7 +959,7 @@ def import_characters_to_marinara(state: dict) -> int:
         sig = file_sig(path)
 
         # Check if character already exists in Marinara by name (most reliable)
-        card_name = char_name_from_path(path).strip().lower()
+        card_name = canonical_slug(char_name_from_path(path).strip().lower())
         if card_name and card_name in existing_names:
             # Character exists — update state sig so we don't re-check next cycle
             state["characters"][rel] = sig
@@ -1040,15 +1096,17 @@ def import_characters_to_lumiverse(state: dict) -> int:
         sig = file_sig(path)
         card_name = char_name_from_path(path).strip().lower()
 
+        # Normalize through aliases before checking (e.g. default_seraphina → seraphina)
+        card_name_norm = canonical_slug(card_name) if card_name else card_name
         # Character already in Lumiverse — mark as synced
-        if card_name and card_name in existing_names:
+        if card_name_norm and card_name_norm in existing_names:
             state["characters"][rel] = sig
             continue
 
         # State says imported but character gone — re-import
         if state["characters"].get(rel) == sig:
-            if card_name and card_name not in existing_names:
-                log(f"lumiverse re-import (missing despite state): {card_name} ({path.name})")
+            if card_name_norm and card_name_norm not in existing_names:
+                log(f"lumiverse re-import (missing despite state): {card_name_norm} ({path.name})")
             else:
                 continue
 

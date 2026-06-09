@@ -740,18 +740,11 @@ class Handler(BaseHTTPRequestHandler):
                     "Set-Cookie",
                     f"hub_app={app}; Path=/; SameSite=Lax; Max-Age=86400",
                 )
-            # Inject hub service worker registration for ST root pages
-            # to ensure stale PWA caches from Lumiverse/Marinara are cleared
-            if "text/html" in content_type.lower() and app == "sillytavern":
-                if b"</head>" in data and b"hub-sw-register" not in data:
-                    sw_script = (
-                        b'<script id="hub-sw-register">'
-                        b'if("serviceWorker"in navigator){'
-                        b'navigator.serviceWorker.register("/sw.js",{scope:"/"}).catch(function(){});'
-                        b'}'
-                        b'</script>'
-                    )
-                    data = data.replace(b"</head>", sw_script + b"</head>", 1)
+            # Hub service worker registration is NOT injected into SillyTavern pages.
+            # The root-scope SW (sw.js) clears stale PWA caches from Lumiverse/Marinara
+            # subpath apps, but injecting it into ST causes black-screen on Chrome incognito
+            # because skipWaiting + clients.claim steals fetches mid-page-load.
+            # SW is registered by subpath SPAs themselves (via their own PWA manifests).
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
