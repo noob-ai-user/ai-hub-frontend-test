@@ -74,6 +74,6 @@ fi
 
 (while true; do sleep 300; /opt/hub/scripts/sync-shared-data.sh || true; done) >&2 &
 
-echo "[hub] gateway on :${HUB_PORT:-7860} (parallel: /apps/sillytavern|lumiverse|marinara/)" >&2
+echo "[hub] gateway on :${HUB_PORT:-7860} (ST=/ hub=/hub lumiverse|marinara=/apps/.../)" >&2
 ( sleep 8; /opt/hub/scripts/sync-shared-data.sh 2>&1 || echo "[hub] warn: post-boot sync" >&2 ) >&2 &
 exec python3 /opt/hub/docker/hub-gateway.py
