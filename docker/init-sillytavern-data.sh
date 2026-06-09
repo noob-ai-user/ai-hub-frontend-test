@@ -45,6 +45,13 @@ for sub in characters worlds chats; do
   fi
 done
 
+
+# === Remove any previously-seeded character files (they live in /data/shared) ===
+if [[ -d "${USER_DIR}/characters" ]]; then
+  find "${USER_DIR}/characters" -maxdepth 1 \( -name "*.png" -o -name "*.json" \) ! -name "hub_*" -delete 2>/dev/null || true
+  echo "[sillytavern] cleared local character files (shared-data mode)" >&2
+fi
+
 # Remove extensionless character stubs (e.g. "Seraphina") — they break chat mkdir.
 if [[ -d "${USER_DIR}/characters" ]]; then
   find "${USER_DIR}/characters" -maxdepth 1 -type f ! -name '*.*' -delete 2>/dev/null || true

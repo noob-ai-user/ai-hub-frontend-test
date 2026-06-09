@@ -875,6 +875,34 @@ def sync_st_to_shared(state: dict) -> int:
         sig = file_sig(path)
         ckey = canonical_key("st", name)
         prev = state["exports"].get(ckey, {})
+
+        # If a canonical card already exists in shared for this character,
+        # convert this ST file to a symlink instead of re-exporting a duplicate.
+        canon_slug = canonical_slug(name_slug(name))
+        canon_rel = f"characters/hub_{canon_slug}.png"
+        canon_path = SHARED / canon_rel
+        if canon_path.is_file() and canon_slug != "default_seraphina":
+            # Canonical exists and this isn't the alias — symlink it
+            try:
+                path.unlink()
+                path.symlink_to(canon_path.resolve())
+                state["characters"][f"st_link:{path.name}"] = file_sig(canon_path)
+                log(f"converted ST dupe to symlink: {path.name} → hub_{canon_slug}.png")
+            except OSError as exc:
+                log(f"ST symlink conversion failed for {path.name}: {exc}")
+            continue
+
+        # For the alias slug (default_seraphina), skip entirely — the canonical
+        # hub_seraphina.png is the authority.
+        if canon_slug == "seraphina" and name_slug(name) == "default_seraphina":
+            # This is the aliased default — delete it, it'll be recreated as a symlink
+            try:
+                path.unlink()
+                log(f"removed ST alias dupe: {path.name} (canonical hub_seraphina.png exists)")
+            except OSError:
+                pass
+            continue
+
         if state["characters"].get(rel) == sig and prev.get("source_id") == path.name:
             continue
 
