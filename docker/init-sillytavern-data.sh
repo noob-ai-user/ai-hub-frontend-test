@@ -46,10 +46,13 @@ for sub in characters worlds chats; do
 done
 
 
-# === Remove any previously-seeded character files (they live in /data/shared) ===
+# === Remove alias character duplicates (canonical lives in /data/shared) ===
 if [[ -d "${USER_DIR}/characters" ]]; then
-  find "${USER_DIR}/characters" -maxdepth 1 \( -name "*.png" -o -name "*.json" \) ! -name "hub_*" -delete 2>/dev/null || true
-  echo "[sillytavern] cleared local character files (shared-data mode)" >&2
+  # Remove extensionless character stubs and alias duplicates
+  find "${USER_DIR}/characters" -maxdepth 1 -type f ! -name '*.*' -delete 2>/dev/null || true
+  # Remove default_* files that are alias duplicates (sync handles canonical)
+  find "${USER_DIR}/characters" -maxdepth 1 -name "default_*.png" -delete 2>/dev/null || true
+  echo "[sillytavern] cleaned alias character files (canonical in /data/shared)" >&2
 fi
 
 # Remove extensionless character stubs (e.g. "Seraphina") — they break chat mkdir.
@@ -86,11 +89,8 @@ index_path, content_dir, user_dir = map(pathlib.Path, sys.argv[1:4])
 
 TYPE_TARGETS = {
     "settings": ".",
-    # "character" and "sprites" intentionally skipped —
-    # characters live ONLY in /data/shared/characters (HF free tier mount).
-    # Seeding them here causes duplication when hub-sync-import runs.
-    # "character": "characters",
-    # "sprites": "characters",
+    "character": "characters",
+    "sprites": "characters",
     "background": "backgrounds",
     "world": "worlds",
     "avatar": "User Avatars",

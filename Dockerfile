@@ -38,11 +38,6 @@ RUN chmod +x /opt/hub/docker/*.sh /opt/hub/scripts/*.sh \
     && /opt/hub/docker/patch-marinara-sw.sh
 
 
-# === Remove default ST character cards from the image (they live in /data/shared) ===
-RUN rm -f /apps/sillytavern/default/content/default_Seraphina.png /apps/sillytavern/default/content/Seraphina 2>/dev/null; \
-    rm -f /apps/sillytavern/default/content/*.png 2>/dev/null; \
-    echo "[build] removed default ST character cards (shared-only mode)"
-
 USER node
 ENV HOME=/home/node
 WORKDIR /home/node

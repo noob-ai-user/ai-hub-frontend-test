@@ -866,42 +866,31 @@ def sync_st_to_shared(state: dict) -> int:
             continue
 
         name = st_display_name(path.stem)
+        # Resolve alias: default_seraphina → seraphina (canonical)
+        canon_name = canonical_slug(name_slug(name)).replace("_", " ")
         if ext == ".png":
-            dest_name = canonical_filename("st", name)
+            dest_name = canonical_filename("st", canon_name)
         else:
             dest_name = path.name
 
         rel = f"characters/{dest_name}"
         sig = file_sig(path)
-        ckey = canonical_key("st", name)
+        ckey = canonical_key("st", canon_name)
         prev = state["exports"].get(ckey, {})
 
-        # If a canonical card already exists in shared for this character,
-        # convert this ST file to a symlink instead of re-exporting a duplicate.
-        canon_slug = canonical_slug(name_slug(name))
-        canon_rel = f"characters/hub_{canon_slug}.png"
-        canon_path = SHARED / canon_rel
-        if canon_path.is_file() and canon_slug != "default_seraphina":
-            # Canonical exists and this isn't the alias — symlink it
-            try:
-                path.unlink()
-                path.symlink_to(canon_path.resolve())
-                state["characters"][f"st_link:{path.name}"] = file_sig(canon_path)
-                log(f"converted ST dupe to symlink: {path.name} → hub_{canon_slug}.png")
-            except OSError as exc:
-                log(f"ST symlink conversion failed for {path.name}: {exc}")
-            continue
-
-        # For the alias slug (default_seraphina), skip entirely — the canonical
-        # hub_seraphina.png is the authority.
-        if canon_slug == "seraphina" and name_slug(name) == "default_seraphina":
-            # This is the aliased default — delete it, it'll be recreated as a symlink
-            try:
-                path.unlink()
-                log(f"removed ST alias dupe: {path.name} (canonical hub_seraphina.png exists)")
-            except OSError:
-                pass
-            continue
+        # If canonical card already exists in shared, convert to symlink
+        if canon_name != name:
+            canon_rel = f"characters/hub_{name_slug(canon_name)}.png"
+            canon_path = SHARED / canon_rel
+            if canon_path.is_file():
+                try:
+                    path.unlink()
+                    path.symlink_to(canon_path.resolve())
+                    state["characters"][f"st_link:{path.name}"] = file_sig(canon_path)
+                    log(f"converted ST alias to symlink: {path.name} → hub_{name_slug(canon_name)}.png")
+                except OSError as exc:
+                    log(f"ST alias symlink failed for {path.name}: {exc}")
+                continue
 
         if state["characters"].get(rel) == sig and prev.get("source_id") == path.name:
             continue
@@ -926,11 +915,20 @@ def sync_st_to_shared(state: dict) -> int:
                 "file": rel,
                 "filename": dest_name,
                 "updated": sig,
-                "name": name,
+                "name": canon_name,
                 "source_id": path.name,
             }
             copied += 1
             log(f"exported ST character → shared: {rel}")
+            # After exporting the canonical, replace local file with symlink
+            if path.is_file() and not path.is_symlink():
+                try:
+                    path.unlink()
+                    path.symlink_to(dest.resolve())
+                    state["characters"][f"st_link:{path.name}"] = file_sig(dest)
+                    log(f"replaced ST local with symlink: {path.name} → {dest_name}")
+                except OSError:
+                    pass  # fallthrough — file remains as local copy
         except OSError as exc:
             log(f"ST export failed for {path.name}: {exc}")
 
