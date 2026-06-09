@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""HF public gateway on :7860 — parallel apps via /apps/{name}/ with base-href injection."""
+"""HF public gateway on :7860 — SillyTavern at /, Lumiverse/Marinara at /apps/{name}/."""
 from __future__ import annotations
 
 import gzip
@@ -27,8 +27,8 @@ PORTS = {
     "marinara": int(os.environ.get("MARINARA_PORT", "7862")),
 }
 
+# SillyTavern is served at / (native paths). Only Vite SPAs need subpath prefixes.
 APP_PREFIXES = {
-    "sillytavern": "/apps/sillytavern",
     "lumiverse": "/apps/lumiverse",
     "marinara": "/apps/marinara",
 }
@@ -43,6 +43,7 @@ HUB_ONLY_PATHS = {
     "/hub",
     "/hub/",
     "/hub.html",
+    "/hub/favicon.ico",
 }
 
 # Root-level paths Vite SPAs still request without Referer (dynamic import / PWA).
@@ -85,12 +86,10 @@ SKIP_RESPONSE_CACHE_HEADERS = {
 
 MAX_JS_REWRITE_BYTES = int(os.environ.get("MAX_JS_REWRITE_BYTES", "524288"))
 
-# Markers that build-time patch scripts (docker/patch-*-subpaths.sh) have run.
+# Markers that build-time patch scripts (docker/patch-app-subpaths.sh) have run.
 BUILD_PATCH_MARKERS: dict[str, tuple[str, ...]] = {
-    "sillytavern": ("/apps/sillytavern/api/", "/apps/sillytavern/csrf-token"),
-    # Require API base marker — basename alone is not enough (v8 skipped /api rewrite).
-    "lumiverse": ("qs=`/apps/lumiverse/api/v1`",),
-    "marinara": ("qs=`/apps/marinara/api/v1`", 'const At="/apps/marinara/api"'),
+    "lumiverse": ("qs=`/apps/lumiverse/api/v1`", "basename:e=`/apps/lumiverse`"),
+    "marinara": ("qs=`/apps/marinara/api/v1`", 'const At="/apps/marinara/api"', "basename:e=`/apps/marinara`"),
 }
 
 
@@ -385,10 +384,7 @@ def rewrite_app_body(data: bytes, content_type: str, prefix: str, app: str = "")
             return data
         if len(data) > MAX_JS_REWRITE_BYTES:
             return data
-        if app == "sillytavern":
-            text = rewrite_root_paths(text, prefix)
-        else:
-            text = rewrite_js_api_paths(text, prefix)
+        text = rewrite_js_api_paths(text, prefix)
     else:
         if "text/html" in ct:
             text = fix_base_href(text, prefix)
@@ -399,10 +395,8 @@ def rewrite_app_body(data: bytes, content_type: str, prefix: str, app: str = "")
 
 
 def proxy_cache_headers(app: str, content_type: str) -> dict[str, str]:
-    """Override backend cache headers for subpath apps (ST had stale gzip in browser cache)."""
+    """Override backend cache headers for subpath SPAs (avoid stale gzip in browser cache)."""
     ct = content_type.lower()
-    if app == "sillytavern" and "text/html" in ct:
-        return {"Cache-Control": "no-cache, must-revalidate"}
     if "javascript" in ct:
         return {"Cache-Control": "no-cache"}
     return {}
@@ -437,24 +431,17 @@ def resolve_route(
     )
     if context_app and (
         any(path.startswith(prefix) for prefix in ORPHAN_APP_PATH_PREFIXES)
-        or path in {"/sw.js", "/favicon.ico", "/manifest.webmanifest"}
+        or path == "/manifest.webmanifest"
     ):
         return context_app, path
 
-    if context_app:
-        return context_app, path
-
-    if path == "/":
-        if "logs=" in query:
-            return "sillytavern", path + (f"?{query}" if query else "")
-        return "hub", path
-
-    return active_app(), path
+    # SillyTavern owns / and all root paths not claimed by hub or subpath SPAs.
+    return "sillytavern", path
 
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "hub-gateway/15"
+    server_version = "hub-gateway/16"
 
     def log_message(self, fmt: str, *args) -> None:
         print(f"[gateway] {self.address_string()} - {fmt % args}", flush=True)
@@ -525,12 +512,15 @@ class Handler(BaseHTTPRequestHandler):
                 return True
 
         if path == "/api/active":
+            apps = {"sillytavern": "/"}
+            apps.update(APP_PREFIXES)
             self._send_json(
                 200,
                 {
                     "active": active_app(),
-                    "routing": "parallel",
-                    "apps": {name: prefix for name, prefix in APP_PREFIXES.items()},
+                    "routing": "st-root+subpath-spas",
+                    "hub_launcher": "/hub",
+                    "apps": apps,
                 },
             )
             return True
@@ -545,7 +535,7 @@ class Handler(BaseHTTPRequestHandler):
             for name, port in PORTS.items():
                 probes[name] = {
                     "port": port,
-                    "prefix": APP_PREFIXES[name],
+                    "prefix": APP_PREFIXES.get(name, "/"),
                     "port_open": port_open(port),
                     "http_ready": backend_ready(name),
                 }
@@ -570,16 +560,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(
                 200,
                 {
-                    "routing": "parallel (/apps/{app}/ + build-time subpath patch)",
+                    "routing": "ST at / ; lumiverse+marinara at /apps/{app}/",
                     "gateway_version": self.server_version,
+                    "hub_launcher": "/hub",
                     "active_fallback": active_app(),
                     "apps": probes,
                     "shared_characters": str(shared_chars),
                     "sync": sync_hint,
-                    "single_app_note": (
-                        "Legacy single-app mode served ST at / (no subpath). "
-                        "Parallel mode requires /apps/sillytavern/ — open that URL, not /."
-                    ),
                 },
             )
             return True
@@ -589,18 +576,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, "message": "sync started in background"})
             return True
 
-        if path == "/favicon.ico" and method == "GET":
+        if path == "/hub/favicon.ico" and method == "GET":
             self._send_public_file("favicon.ico", "image/x-icon")
             return True
 
-        if path == "/sw.js" and method == "GET":
-            self._send_public_file("sw.js", "application/javascript; charset=utf-8")
-            return True
-
-        # Legacy shortcuts → prefixed app URLs (new tab friendly).
+        # Legacy shortcuts → canonical app URLs.
         legacy = {
-            "/sillytavern": "/apps/sillytavern/",
-            "/sillytavern/": "/apps/sillytavern/",
+            "/sillytavern": "/",
+            "/sillytavern/": "/",
+            "/apps/sillytavern": "/",
+            "/apps/sillytavern/": "/",
             "/lumiverse": "/apps/lumiverse/",
             "/lumiverse/": "/apps/lumiverse/",
             "/marinara": "/apps/marinara/",
@@ -610,16 +595,19 @@ class Handler(BaseHTTPRequestHandler):
             self._redirect(legacy[path])
             return True
 
+        if path.startswith("/apps/sillytavern/"):
+            self._redirect(path[len("/apps/sillytavern") :] or "/")
+            return True
+
         if path.startswith("/api/switch/") and method == "GET":
             app = path.rsplit("/", 1)[-1].lower()
+            if app == "sillytavern":
+                self._redirect("/")
+                return True
             if app in APP_PREFIXES:
                 self._redirect(f"{APP_PREFIXES[app]}/")
                 return True
             self._send_json(400, {"error": "unknown app"})
-            return True
-
-        if path == "/" and method == "GET" and "logs=" not in query:
-            self._send_html("index.html")
             return True
 
         return False
@@ -653,9 +641,6 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin", "")
         cookie = self.headers.get("Cookie", "")
         app, backend_path = resolve_route(path, referer, query, origin, cookie)
-        if app == "hub":
-            self._send_html("index.html")
-            return
 
         if query and "?" not in backend_path:
             backend_path = f"{backend_path}?{query}"
@@ -696,11 +681,11 @@ class Handler(BaseHTTPRequestHandler):
             if prefix:
                 for key, value in proxy_cache_headers(app, content_type).items():
                     self.send_header(key, value)
-                if "text/html" in content_type.lower():
-                    self.send_header(
-                        "Set-Cookie",
-                        f"hub_app={app}; Path=/; SameSite=Lax; Max-Age=86400",
-                    )
+            if "text/html" in content_type.lower() and app in PORTS:
+                self.send_header(
+                    "Set-Cookie",
+                    f"hub_app={app}; Path=/; SameSite=Lax; Max-Age=86400",
+                )
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -715,9 +700,6 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin", "")
         cookie = self.headers.get("Cookie", "")
         app, backend_path = resolve_route(path, referer, query, origin, cookie)
-        if app == "hub":
-            self.send_error(400, "WebSocket not supported on hub route")
-            return
         if query and "?" not in backend_path:
             backend_path = f"{backend_path}?{query}"
 
@@ -798,8 +780,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     print(
-        f"[gateway] starting on 0.0.0.0:{HUB_PORT} mode=parallel+rewrite "
-        f"prefixes={','.join(APP_PREFIXES.values())}",
+        f"[gateway] starting on 0.0.0.0:{HUB_PORT} mode=st-root+subpath-spas "
+        f"st=/ prefixes={','.join(APP_PREFIXES.values())} hub=/hub",
         flush=True,
     )
     server = ThreadingHTTPServer(("0.0.0.0", HUB_PORT), Handler)
