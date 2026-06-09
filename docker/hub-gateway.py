@@ -227,32 +227,6 @@ def strip_lumiverse_pwa_html(text: str) -> str:
     return text
 
 
-ST_SW_CLEANUP = """<script>
-/* hub: unregister stale root-scoped service workers (breaks ST under /apps/sillytavern/) */
-(function () {
-  if (!("serviceWorker" in navigator)) return;
-  navigator.serviceWorker.getRegistrations().then(function (regs) {
-    return Promise.all(regs.map(function (r) { return r.unregister(); }));
-  }).catch(function () {});
-  if ("caches" in window) {
-    caches.keys().then(function (keys) {
-      return Promise.all(keys.map(function (k) { return caches.delete(k); }));
-    }).catch(function () {});
-  }
-})();
-</script>"""
-
-
-def inject_st_sw_cleanup(text: str) -> str:
-    if "hub: unregister stale root-scoped service workers" in text:
-        return text
-    head = re.search(r"<head([^>]*)>", text, re.I)
-    if head:
-        pos = head.end()
-        return text[:pos] + f"\n  {ST_SW_CLEANUP}" + text[pos:]
-    return ST_SW_CLEANUP + text
-
-
 def rewrite_root_paths(text: str, prefix: str) -> str:
     """Rewrite root-absolute URLs in HTML/CSS/JSON — <base> does NOT affect paths starting with /."""
 
@@ -372,28 +346,6 @@ def patch_lumiverse_router_basename(text: str, prefix: str) -> str:
     return text
 
 
-def patch_spa_asset_paths(text: str, prefix: str) -> str:
-    """Prefix bare /assets/ URLs in Vite chunks (dynamic import often omits Referer)."""
-    if f"{prefix}/assets/" in text:
-        return text
-
-    def repl_quoted(match: re.Match[str]) -> str:
-        quote, path = match.group(1), match.group(2)
-        if path.startswith("/assets/") and not path.startswith(prefix + "/"):
-            return f"{quote}{prefix}{path}{quote}"
-        return match.group(0)
-
-    def repl_backtick(match: re.Match[str]) -> str:
-        path = match.group(1)
-        if path.startswith("/assets/") and not path.startswith(prefix + "/"):
-            return f"`{prefix}{path}`"
-        return match.group(0)
-
-    text = re.sub(r'(["\'])(/assets/[^"\'\\]*)\1', repl_quoted, text)
-    text = re.sub(r"`(/assets/[^`\\]*)`", repl_backtick, text)
-    return text
-
-
 def patch_lumiverse_js(text: str, prefix: str) -> str:
     """Apply basename + /api* prefixing for Lumiverse entry/lazy chunks."""
     text = patch_lumiverse_router_basename(text, prefix)
@@ -420,17 +372,15 @@ def rewrite_app_body(data: bytes, content_type: str, prefix: str, app: str = "")
     except UnicodeDecodeError:
         return data
     if "javascript" in ct:
-        if app in ("lumiverse", "marinara"):
-            text = patch_spa_asset_paths(text, prefix)
+        # Vite/Marinara/Lumiverse bundles are patched at image build — do not
+        # re-decode multi-MB chunks on every request (slow + risks corruption).
+        if app in ("lumiverse", "marinara") and js_already_build_patched(text, app):
+            return data
         if app == "lumiverse":
-            text = patch_lumiverse_js(text, prefix)
-            return text.encode("utf-8")
-        if app == "marinara":
-            if js_already_build_patched(text, app):
-                return text.encode("utf-8")
-            if len(data) <= MAX_JS_REWRITE_BYTES:
-                text = rewrite_js_api_paths(text, prefix)
-            return text.encode("utf-8")
+            patched = patch_lumiverse_js(text, prefix)
+            if patched != text:
+                return patched.encode("utf-8")
+            return data
         if js_already_build_patched(text, app):
             return data
         if len(data) > MAX_JS_REWRITE_BYTES:
@@ -444,8 +394,6 @@ def rewrite_app_body(data: bytes, content_type: str, prefix: str, app: str = "")
             text = fix_base_href(text, prefix)
             if app == "lumiverse":
                 text = strip_lumiverse_pwa_html(text)
-            if app == "sillytavern":
-                text = inject_st_sw_cleanup(text)
         text = rewrite_root_paths(text, prefix)
     return text.encode("utf-8")
 
@@ -453,13 +401,8 @@ def rewrite_app_body(data: bytes, content_type: str, prefix: str, app: str = "")
 def proxy_cache_headers(app: str, content_type: str) -> dict[str, str]:
     """Override backend cache headers for subpath apps (ST had stale gzip in browser cache)."""
     ct = content_type.lower()
-    if app == "sillytavern" and any(
-        token in ct for token in ("text/html", "javascript", "text/css")
-    ):
-        return {
-            "Cache-Control": "no-store, must-revalidate",
-            "Pragma": "no-cache",
-        }
+    if app == "sillytavern" and "text/html" in ct:
+        return {"Cache-Control": "no-cache, must-revalidate"}
     if "javascript" in ct:
         return {"Cache-Control": "no-cache"}
     return {}
@@ -511,7 +454,7 @@ def resolve_route(
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "hub-gateway/14"
+    server_version = "hub-gateway/15"
 
     def log_message(self, fmt: str, *args) -> None:
         print(f"[gateway] {self.address_string()} - {fmt % args}", flush=True)
