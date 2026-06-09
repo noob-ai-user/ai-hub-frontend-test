@@ -119,7 +119,7 @@ for path in root.rglob("*"):
             # API paths + router basename only — never rewrite_static on minified JS
             # (breaks regex literals and causes blue/black SPA screens).
             text = rewrite_api_js(text)
-            if prefix.endswith("/lumiverse"):
+            if prefix.endswith("/lumiverse") or prefix.endswith("/marinara"):
                 text = rewrite_router_basename(text)
         if text != original:
             path.write_text(text, encoding="utf-8")
