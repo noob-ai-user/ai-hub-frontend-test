@@ -948,7 +948,6 @@ def sync_st_to_shared(state: dict) -> int:
             dest = world_info_dir / path.name
             try:
                 if path.resolve() != dest.resolve():
-                    import shutil
                     shutil.copy2(path, dest)
                     state.setdefault("world_info", {})[rel] = sig
                     copied += 1
