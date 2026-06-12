@@ -1338,7 +1338,7 @@ def export_marinara_lorebooks_to_shared(state: dict) -> int:
         updated = str(item.get("updatedAt") or item.get("updated_at") or "")
         name = str(item.get("name") or "lorebook")
         
-        canon_name = f"{name_slug(name)}_{lb_id[:6]}.json"
+        canon_name = f"hub_{name_slug(name)}.json"
         rel = f"world_info/{canon_name}"
 
         ckey = f"marinara_lb:{lb_id}"
@@ -1402,7 +1402,7 @@ def export_lumiverse_lorebooks_to_shared(state: dict) -> int:
         updated = str(item.get("updatedAt") or item.get("updated_at") or "")
         name = str(item.get("name") or "lorebook")
         
-        canon_name = f"{name_slug(name)}_{lb_id[:6]}.json"
+        canon_name = f"hub_{name_slug(name)}.json"
         rel = f"world_info/{canon_name}"
 
         ckey = f"lumiverse_lb:{lb_id}"

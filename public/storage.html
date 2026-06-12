@@ -491,6 +491,12 @@
           }
         },
         renderMarkdown(item) {
+          if (item.isOnline) {
+            let md = '';
+            if (item.tagline) md += `*${item.tagline}*\n\n`;
+            if (item.description) md += `### Description\n${item.description}\n\n`;
+            return marked.parse(md || '*No description provided on Chub.*');
+          }
           if (!item.metadata) {
             return item.isJson 
               ? '<p>No readable content found in this JSON file.</p>' 
