@@ -640,13 +640,66 @@ class Handler(BaseHTTPRequestHandler):
             shared_dir = DATA_ROOT / "shared"
             chars = []
             lores = []
+            
+            import base64
+            import json
+            import urllib.parse
+            import struct
+
+            def parse_metadata(fpath):
+                ext = fpath.suffix.lower()
+                if ext == ".json":
+                    try:
+                        with open(fpath, "r", encoding="utf-8") as f:
+                            return json.load(f)
+                    except:
+                        pass
+                elif ext == ".png":
+                    try:
+                        with open(fpath, "rb") as f:
+                            if f.read(8) != b'\x89PNG\r\n\x1a\n': return None
+                            while True:
+                                length_bytes = f.read(4)
+                                if len(length_bytes) < 4: break
+                                length = struct.unpack('>I', length_bytes)[0]
+                                chunk_type = f.read(4)
+                                if chunk_type == b'tEXt':
+                                    data = f.read(length)
+                                    f.read(4) # crc
+                                    if data.startswith(b'chara\0'):
+                                        b64_data = data[6:]
+                                        try:
+                                            json_str = urllib.parse.unquote(base64.b64decode(b64_data).decode('utf-8', 'ignore'))
+                                            return json.loads(json_str)
+                                        except:
+                                            pass
+                                    elif data.startswith(b'ccv3\0'):
+                                        b64_data = data[5:]
+                                        try:
+                                            json_str = urllib.parse.unquote(base64.b64decode(b64_data).decode('utf-8', 'ignore'))
+                                            return json.loads(json_str)
+                                        except:
+                                            pass
+                                else:
+                                    f.seek(length + 4, 1) # skip data and crc
+                    except:
+                        pass
+                return None
+
             for t_dir, lst in [("characters", chars), ("world_info", lores)]:
                 d = shared_dir / t_dir
                 if d.is_dir():
                     for f in d.iterdir():
                         if f.is_file():
                             st = f.stat()
-                            lst.append({"name": f.name, "path": str(f.resolve()), "size": st.st_size, "mtime": st.st_mtime})
+                            meta = parse_metadata(f)
+                            lst.append({
+                                "name": f.name,
+                                "path": str(f.resolve()),
+                                "size": st.st_size,
+                                "mtime": st.st_mtime,
+                                "metadata": meta
+                            })
             self._send_json(200, {"characters": chars, "lorebooks": lores})
             return True
 

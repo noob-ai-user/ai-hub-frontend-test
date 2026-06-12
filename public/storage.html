@@ -312,51 +312,66 @@
     let currentTab = 'characters';
     let selectedItem = null;
 
-    // Smart Parser: Handles PNGs (tEXt chara) and JSONs directly
-    async function fetchMetadata(item) {
-      if (parsedCache[item.path]) return parsedCache[item.path];
-      try {
-        const res = await fetch(`/api/storage/download?path=${encodeURIComponent(item.path)}`);
+    // Smart Parser: Handled by Backend now. Metadata is pre-populated in item.metadata
+    async function openModal(item) {
+      selectedItem = item;
+      const modal = document.getElementById('charModal');
+      const imgUrl = `/api/storage/download?path=${encodeURIComponent(item.path)}`;
+      const fallbackImg = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 24 24" fill="none" stroke="%232a324a" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22h14a2 2 0 0 0 2-2V7.5L14.5 2H6a2 2 0 0 0-2 2v4"/><path d="M14 2v6h6"/></svg>';
+      
+      const modalLeft = document.getElementById('modalLeft');
+      const displayImg = (!item.isJson && currentTab === 'characters') ? imgUrl : fallbackImg;
+      document.getElementById('modalImg').src = displayImg;
+      document.getElementById('modalImg').style.objectFit = (!item.isJson && currentTab === 'characters') ? 'cover' : 'contain';
+      document.getElementById('modalImg').style.padding = (!item.isJson && currentTab === 'characters') ? '0' : '3rem';
+      
+      document.getElementById('modalName').textContent = item.displayName;
+      document.getElementById('modalCreator').textContent = 'Loading metadata...';
+      
+      modal.classList.add('active');
+
+      const data = item.metadata;
+      const mdb = document.getElementById('modalBody');
+      
+      if (data) {
+        // V2/V3 or V1 schema
+        const spec = data.data || data; 
         
-        // If JSON file, parse it natively
-        if (item.path.toLowerCase().endsWith('.json')) {
-           const jsonData = await res.json();
-           parsedCache[item.path] = jsonData;
-           return jsonData;
-        }
-
-        // If PNG file, extract V2/V1 Base64 tEXt chunks
-        const buffer = await res.arrayBuffer();
-        const dataView = new DataView(buffer);
-        let offset = 8;
-        while (offset < dataView.byteLength) {
-          const length = dataView.getUint32(offset);
-          const type = String.fromCharCode(
-            dataView.getUint8(offset + 4), dataView.getUint8(offset + 5),
-            dataView.getUint8(offset + 6), dataView.getUint8(offset + 7)
-          );
-          if (type === 'tEXt') {
-            const dataOffset = offset + 8;
-            let text = '';
-            for (let i = 0; i < length; i++) {
-              text += String.fromCharCode(dataView.getUint8(dataOffset + i));
+        let md = '';
+        if (currentTab === 'characters') {
+            document.getElementById('modalName').textContent = spec.name || item.displayName;
+            document.getElementById('modalCreator').textContent = spec.creator ? `BY ${spec.creator}` : 'CHARACTER FILE';
+            
+            if (spec.description) md += `### Description\n${spec.description}\n\n`;
+            if (spec.personality) md += `### Personality\n${spec.personality}\n\n`;
+            if (spec.first_mes) md += `### First Message\n\n> ${spec.first_mes.replace(/\\n/g, '\n> ')}\n\n`;
+            if (spec.mes_example) md += `### Example Messages\n\n\`\`\`text\n${spec.mes_example}\n\`\`\`\n\n`;
+        } else {
+            // Lorebooks schema
+            document.getElementById('modalCreator').textContent = 'LOREBOOK FILE';
+            const entries = spec.entries ? Object.values(spec.entries) : [];
+            md += `*Loaded ${entries.length} entries.*\n\n`;
+            
+            entries.slice(0, 20).forEach(e => {
+                let keys = e.keys || e.key || [];
+                md += `### ${keys.join(', ') || 'Untitled Entry'}\n`;
+                md += `${e.content}\n\n`;
+            });
+            if (entries.length > 20) {
+                md += `*...and ${entries.length - 20} more entries. Download to view all.*`;
             }
-            if (text.startsWith('chara\0')) {
-              const base64 = text.substring(6);
-              const jsonStr = decodeURIComponent(escape(atob(base64)));
-              const charData = JSON.parse(jsonStr);
-              parsedCache[item.path] = charData;
-              return charData;
-            }
-          }
-          offset += 12 + length;
         }
-      } catch (e) {
-        console.error("Failed to parse metadata", e);
+        
+        mdb.innerHTML = window.marked ? marked.parse(md) : md;
+      } else {
+        document.getElementById('modalCreator').textContent = item.isJson ? 'JSON FILE' : 'RAW IMAGE';
+        if (!item.isJson && currentTab === 'characters') {
+           mdb.innerHTML = '<p>No internal metadata found. This is a raw image without embedded character data. It may rely on an external .json file.</p>';
+        } else {
+           mdb.innerHTML = '<p>Cannot display preview. Download to view file contents.</p>';
+        }
       }
-      return null;
     }
-
     async function loadData() {
       try {
         const res = await fetch('/api/storage/list');
@@ -427,66 +442,6 @@
         div.onclick = () => openModal(item);
         grid.appendChild(div);
       });
-    }
-
-    async function openModal(item) {
-      selectedItem = item;
-      const modal = document.getElementById('charModal');
-      const imgUrl = `/api/storage/download?path=${encodeURIComponent(item.path)}`;
-      const fallbackImg = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 24 24" fill="none" stroke="%232a324a" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22h14a2 2 0 0 0 2-2V7.5L14.5 2H6a2 2 0 0 0-2 2v4"/><path d="M14 2v6h6"/></svg>';
-      
-      const modalLeft = document.getElementById('modalLeft');
-      const displayImg = (!item.isJson && currentTab === 'characters') ? imgUrl : fallbackImg;
-      document.getElementById('modalImg').src = displayImg;
-      document.getElementById('modalImg').style.objectFit = (!item.isJson && currentTab === 'characters') ? 'cover' : 'contain';
-      document.getElementById('modalImg').style.padding = (!item.isJson && currentTab === 'characters') ? '0' : '3rem';
-      
-      document.getElementById('modalName').textContent = item.displayName;
-      document.getElementById('modalCreator').textContent = 'Loading metadata...';
-      document.getElementById('modalBody').innerHTML = '<div class="loader"></div>';
-      
-      modal.classList.add('active');
-
-      const data = await fetchMetadata(item);
-      const mdb = document.getElementById('modalBody');
-      
-      if (data) {
-        // SillyTavern V2 or V1 character schema
-        const spec = data.data || data; 
-        
-        let md = '';
-        if (currentTab === 'characters') {
-            document.getElementById('modalName').textContent = spec.name || item.displayName;
-            document.getElementById('modalCreator').textContent = spec.creator ? `BY ${spec.creator}` : 'CHARACTER FILE';
-            
-            if (spec.description) md += `### Description\n${spec.description}\n\n`;
-            if (spec.personality) md += `### Personality\n${spec.personality}\n\n`;
-            if (spec.first_mes) md += `### First Message\n\n> ${spec.first_mes.replace(/\\n/g, '\n> ')}\n\n`;
-            if (spec.mes_example) md += `### Example Messages\n\n\`\`\`text\n${spec.mes_example}\n\`\`\`\n\n`;
-        } else {
-            // Lorebooks schema
-            document.getElementById('modalCreator').textContent = 'LOREBOOK FILE';
-            const entries = spec.entries ? Object.values(spec.entries) : [];
-            md += `*Loaded ${entries.length} entries.*\n\n`;
-            
-            entries.slice(0, 20).forEach(e => {
-                md += `### ${e.key.join(', ') || 'Untitled Entry'}\n`;
-                md += `${e.content}\n\n`;
-            });
-            if (entries.length > 20) {
-                md += `*...and ${entries.length - 20} more entries. Download to view all.*`;
-            }
-        }
-        
-        mdb.innerHTML = window.marked ? marked.parse(md) : md;
-      } else {
-        document.getElementById('modalCreator').textContent = item.isJson ? 'JSON FILE' : 'RAW IMAGE';
-        if (!item.isJson && currentTab === 'characters') {
-           mdb.innerHTML = '<p>No internal metadata found. This is a raw image without embedded character data. It may rely on an external .json file.</p>';
-        } else {
-           mdb.innerHTML = '<p>Cannot display preview. Download to view file contents.</p>';
-        }
-      }
     }
 
     function closeModal() {
