@@ -244,7 +244,7 @@
            </div>
            <div v-else class="grid">
               <div class="card" v-for="node in onlineResults" :key="node.id" @click="openOnlineModal(node)">
-                <img class="card-img" :src="node.avatar_url" style="object-fit: cover">
+                <img class="card-img" :src="node.avatar_url.replace('https://avatars.charhub.io/avatars/', '/api/storage/chub/avatar/')" style="object-fit: cover" @error="$event.target.src = '/thumbnail?type=avatar&file=user-default.png'">
                 <div class="card-content">
                   <div class="card-meta">
                     <span class="badge" style="background:#c084fc; color:white">★ {{ node.starCount }}</span>

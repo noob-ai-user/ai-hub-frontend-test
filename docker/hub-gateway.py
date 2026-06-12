@@ -835,14 +835,28 @@ class Handler(BaseHTTPRequestHandler):
                     'Accept': 'application/json'
                 })
                 with urllib.request.urlopen(req, timeout=15) as resp:
-                    self._send_json(200, json.loads(resp.read()))
+                    headers = {}
+                    if resp.info().get('Content-Encoding'):
+                        headers['Content-Encoding'] = resp.info().get('Content-Encoding')
+                    data_bytes = resp.read()
+                    if not headers:
+                        try:
+                            # Rewrite image URLs to route through proxy
+                            data_str = data_bytes.decode('utf-8')
+                            data_str = data_str.replace("https://avatars.charhub.io/avatars/", "/api/storage/chub/avatar/")
+                            data_bytes = data_str.encode('utf-8')
+                        except:
+                            pass
+                    self._send_bytes(200, data_bytes, "application/json", headers)
             except Exception as e:
-                self._send_json(500, {"error": str(e)})
+                import traceback
+                self._send_json(500, {"error": str(e), "traceback": traceback.format_exc()})
             return True
 
         if (path.startswith("/api/storage/chub/character/") or path.startswith("/apps/marinara/api/bot-browser/chub/character/")) and method == "GET":
             import urllib.request
             import json
+            import traceback
             char_id = path.split("/character/")[1]
             url = f"https://api.chub.ai/api/characters/{char_id}?full=true"
             try:
@@ -851,7 +865,66 @@ class Handler(BaseHTTPRequestHandler):
                     'Accept': 'application/json'
                 })
                 with urllib.request.urlopen(req, timeout=15) as resp:
-                    self._send_json(200, json.loads(resp.read()))
+                    headers = {}
+                    if resp.info().get('Content-Encoding'):
+                        headers['Content-Encoding'] = resp.info().get('Content-Encoding')
+                    data_bytes = resp.read()
+                    if not headers:
+                        try:
+                            # Rewrite image URLs to route through proxy
+                            data_str = data_bytes.decode('utf-8')
+                            data_str = data_str.replace("https://avatars.charhub.io/avatars/", "/api/storage/chub/avatar/")
+                            data_bytes = data_str.encode('utf-8')
+                        except:
+                            pass
+                    self._send_bytes(200, data_bytes, "application/json", headers)
+            except Exception as e:
+                self._send_json(500, {"error": str(e), "traceback": traceback.format_exc()})
+            return True
+
+        if (path.startswith("/api/storage/chub/avatar/") or path.startswith("/apps/marinara/api/bot-browser/chub/avatar/")) and method == "GET":
+            import urllib.request
+            char_id = path.split("/avatar/")[1]
+            url = f"https://avatars.charhub.io/avatars/{char_id}"
+            if not url.endswith(('.webp', '.png', '.jpg', '.jpeg')):
+                url += "/avatar.webp"
+            try:
+                req = urllib.request.Request(url, headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+                    'Referer': 'https://chub.ai/'
+                })
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    ct = resp.headers.get_content_type() or "image/webp"
+                    self._send_bytes(200, resp.read(), ct, {"Cache-Control": "public, max-age=86400"})
+            except Exception as e:
+                try:
+                    url2 = f"https://avatars.charhub.io/avatars/{char_id}/chara_card_v2.png"
+                    req2 = urllib.request.Request(url2, headers={
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                        'Referer': 'https://chub.ai/'
+                    })
+                    with urllib.request.urlopen(req2, timeout=15) as resp2:
+                        self._send_bytes(200, resp2.read(), "image/png", {"Cache-Control": "public, max-age=86400"})
+                except:
+                    self._send_json(500, {"error": str(e)})
+            return True
+
+        if (path.startswith("/api/storage/chub/download/") or path.startswith("/apps/marinara/api/bot-browser/chub/download/")) and method == "GET":
+            import urllib.request
+            char_id = path.split("/download/")[1]
+            url = f"https://avatars.charhub.io/avatars/{char_id}/chara_card_v2.png"
+            try:
+                req = urllib.request.Request(url, headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'image/png,image/*,*/*;q=0.8',
+                    'Referer': 'https://chub.ai/'
+                })
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    self._send_bytes(200, resp.read(), "image/png", {
+                        "Content-Disposition": 'attachment; filename="character.png"',
+                        "Cache-Control": "public, max-age=86400"
+                    })
             except Exception as e:
                 self._send_json(500, {"error": str(e)})
             return True
