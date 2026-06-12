@@ -696,7 +696,15 @@ class Handler(BaseHTTPRequestHandler):
                 body.append(f"\r\n--{boundary}--\r\n".encode())
                 data = b"".join(body)
                 
-                req = urllib.request.Request("https://catbox.moe/user/api.php", data=data, headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}, method="POST")
+                req = urllib.request.Request(
+                    "https://catbox.moe/user/api.php",
+                    data=data,
+                    headers={
+                        "Content-Type": f"multipart/form-data; boundary={boundary}",
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 AIHub/1.0"
+                    },
+                    method="POST"
+                )
                 with urllib.request.urlopen(req, timeout=30) as resp:
                     catbox_url = resp.read().decode("utf-8").strip()
                     self._send_json(200, {"url": catbox_url})
