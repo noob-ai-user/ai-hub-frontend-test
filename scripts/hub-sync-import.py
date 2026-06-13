@@ -1043,8 +1043,16 @@ def sync_shared_symlinks_to_st(state: dict) -> int:
     for path in sorted(char_dir.iterdir()):
         if not path.is_file() or not is_importable_global(path.name):
             continue
+        # Skip files that aren't real PNGs (e.g. a webp saved as .png by an older
+        # import). SillyTavern's strict PNG parser errors on them ("no IEND").
+        if path.suffix.lower() == ".png":
+            try:
+                with open(path, "rb") as _fh:
+                    if _fh.read(8) != b"\x89PNG\r\n\x1a\n":
+                        continue
+            except OSError:
+                continue
 
-        name = char_name_from_path(path)
         target_name = f"{safe_name(name)}.png"
         card_key = name.strip().lower()
         if card_key in existing_names:
