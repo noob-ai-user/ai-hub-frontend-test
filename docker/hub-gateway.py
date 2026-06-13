@@ -1259,6 +1259,17 @@ class Handler(BaseHTTPRequestHandler):
             if prefix:
                 for key, value in proxy_cache_headers(app, content_type).items():
                     self.send_header(key, value)
+            else:
+                # ST (root) static assets: let the browser cache them so a refresh
+                # doesn't re-download ~200 JS/CSS/font files every time. HTML stays
+                # uncached. Cache-Control was stripped from the backend above.
+                _p = self.path.split("?", 1)[0]
+                if (_p.endswith((".js", ".mjs", ".css", ".woff2", ".woff", ".ttf",
+                                 ".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif",
+                                 ".mp3", ".ico"))
+                        or _p.startswith(("/scripts/", "/lib/", "/css/", "/webfonts/",
+                                          "/fonts/", "/img/", "/sounds/", "/locales/"))):
+                    self.send_header("Cache-Control", "public, max-age=604800")
             if "text/html" in content_type.lower() and app in PORTS:
                 self.send_header(
                     "Set-Cookie",
