@@ -329,11 +329,14 @@ createApp({
     clearTags(){this.inc=[];this.exc=[];},
     async run(reset){
       if(reset){this.page=1;this.curQ=this.q;this.results=[];}
+      else{this.page++;}
       this.searching=true;const src=this.src;
       try{
         const r=await PV[src].search({query:this.curQ.trim(),page:this.page,sort:this.sort,nsfw:this.nsfw,inc:this.inc,exc:this.exc});
-        this.results=reset?r.cards:this.results.concat(r.cards);this.hasMore=!!r.more;
-      }catch(e){this.hasMore=false;this.toast2('Could not reach '+PV[src].name+'. Try again.',true);}
+        const seen=new Set(this.results.map(c=>c.source+':'+c.id));
+        const fresh=(r.cards||[]).filter(c=>!seen.has(c.source+':'+c.id));
+        this.results=reset?r.cards:this.results.concat(fresh);this.hasMore=!!r.more;
+      }catch(e){if(!reset)this.page--;this.hasMore=false;this.toast2('Could not reach '+PV[src].name+'. Try again.',true);}
       finally{this.searching=false;}
     },
     openOnline(c){this.sel={...c,isOnline:true,isJson:false,metaName:c.name,metaCreator:c.creator};document.body.style.overflow='hidden';this.enrich(c);},
@@ -350,18 +353,50 @@ createApp({
       finally{this.uploading=false;}
     },
     async up(png,name){const safe=(name||'character').replace(/[^a-zA-Z0-9]+/g,'_').replace(/^_+|_+$/g,'')||'character';const fd=new FormData();fd.append('file',new Blob([png],{type:'image/png'}),safe+'.png');const r=await(await fetch('/api/storage/upload',{method:'POST',body:fd})).json();if(!r.success)throw new Error(r.error||'upload');},
+    resolveLink(url){
+      url=(url||'').trim();
+      const uuid=(url.match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/)||[])[0];
+      let m;
+      if(/janitorai\.com|datacat\.run/i.test(url)&&uuid)return{source:'datacat',id:uuid};
+      if((m=url.match(/(?:chub\.ai|characterhub\.org|venus\.chub\.ai)\/(?:characters\/)?([^?#]+)/i))){
+        const p=m[1].replace(/^characters\//,'').replace(/\/+$/,'');
+        if(p.split('/').length>=2)return{source:'chub',id:p};
+      }
+      if((m=url.match(/wyvern\.chat\/characters\/([^/?#]+)/i)))return{source:'wyvern',id:m[1]};
+      if((m=url.match(/pygmalion\.chat\/characters?\/([^/?#]+)/i)))return{source:'pygmalion',id:m[1]};
+      if((m=url.match(/character-tavern\.com\/character\/([^?#]+)/i)))return{source:'chartavern',id:m[1].replace(/\/+$/,'')};
+      if(uuid)return{source:'datacat',id:uuid};
+      return null;
+    },
     async importFromLink(){
-      if(this.uploading)return;const url=(prompt('Paste a JanitorAI / DataCat character link:')||'').trim();if(!url)return;
-      const id=(url.match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/)||[])[0];
-      if(!id){this.toast2('No character id in that link.',true);return;}
+      if(this.uploading)return;
+      const url=(prompt('Paste a character link (Chub, JanitorAI/DataCat, Wyvern, Pygmalion, CharTavern):')||'').trim();if(!url)return;
+      const r=this.resolveLink(url);
+      if(!r){this.toast2('Unrecognized link. Supported: Chub, JanitorAI/DataCat, Wyvern, Pygmalion, CharTavern.',true);return;}
       this.uploading=true;
       try{
-        const j=await(await fetch('/api/storage/datacat/download/'+encodeURIComponent(id))).json();
-        const card=(j&&j.data)?{spec:j.spec||'chara_card_v2',spec_version:j.spec_version||'2.0',data:j.data}:j;
-        const name=(card.data&&card.data.name)||'character';
-        const png=embed(await toPng(card.data&&card.data.avatar,name),b64(JSON.stringify(card)));
+        let png,name;
+        if(r.source==='datacat'){
+          const j=await(await fetch('/api/storage/datacat/download/'+encodeURIComponent(r.id))).json();
+          const card=(j&&j.data)?{spec:j.spec||'chara_card_v2',spec_version:j.spec_version||'2.0',data:j.data}:j;
+          name=(card.data&&card.data.name)||'character';
+          png=embed(await toPng(card.data&&card.data.avatar,name),b64(JSON.stringify(card)));
+        }else if(r.source==='chub'){
+          const j=await(await fetch(CHUB+'/api/characters/'+r.id+'?full=true',{headers:{Accept:'application/json'}})).json();
+          const node=j.node||(j.data&&j.data.node)||{};const def=node.definition||{};
+          name=node.name||r.id.split('/').pop()||'character';
+          const d={description:def.description,personality:def.personality,scenario:def.scenario,firstMessage:def.first_message||def.first_mes,exampleDialogs:def.example_dialogs||def.mes_example,creatorNotes:def.creator_notes,alternateGreetings:(def.alternate_greetings||[]).filter(Boolean)};
+          const card=v2(name,d,node.topics||[],(r.id.split('/')[0]||''));
+          png=embed(await toPng(node.max_res_url||node.avatar_url,name),b64(JSON.stringify(card)));
+        }else{
+          // wyvern / pygmalion / chartavern — fetched through the Marinara proxy
+          const d=await PV[r.source].detail({source:r.source,id:r.id});
+          name=d.name||decodeURIComponent(r.id.split('/').pop()||'character').replace(/[-_]+/g,' ');
+          const card=v2(name,d,[],'');
+          png=embed(await toPng(d.avatarUrl||PH,name),b64(JSON.stringify(card)));
+        }
         await this.up(png,name);this.toast2('Imported "'+name+'"! Appears shortly.');this.fetchData();
-      }catch(e){this.toast2('Import failed — may not be on DataCat. ('+(e.message||'')+')',true);}
+      }catch(e){this.toast2('Import failed — '+(e.message||'error'),true);}
       finally{this.uploading=false;}
     },
     async fetchData(){
