@@ -168,9 +168,9 @@
         <select class="sel" v-model="src" @change="onSrc">
           <option v-for="(p,k) in providers" :key="k" :value="k">{{p.icon}} {{p.name}}</option>
         </select>
-        <div class="search"><svg class="ic" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg><input v-model="q" :placeholder="'Search '+providers[src].name+'…'" @keyup.enter="run(true)"></div>
+        <div class="search"><svg class="ic" @click="run(true)" style="cursor:pointer" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg><input v-model="q" :placeholder="'Search '+providers[src].name+'…'" @keyup.enter="run(true)" @search="run(true)" enterkeyhint="search"></div>
         <select class="sel" v-model="sort" @change="run(true)"><option v-for="o in providers[src].sorts" :key="o.v" :value="o.v">{{o.label}}</option></select>
-        <button class="pill" :class="{on:showTags}" @click="showTags=!showTags">🏷️ Tags<span v-if="inc.length||exc.length"> ({{inc.length+exc.length}})</span></button>
+        <button class="pill" v-if="!providers[src].noTags" :class="{on:showTags}" @click="showTags=!showTags">🏷️ Tags<span v-if="inc.length||exc.length"> ({{inc.length+exc.length}})</span></button>
         <label class="chk"><input type="checkbox" v-model="nsfw" @change="run(true)"> NSFW</label>
       </div>
 
@@ -294,14 +294,12 @@ const PV={
     },
     async detail(c){const k=await(await fetch(MAR+'/wyvern/character/'+c.id)).json();return{description:k.description,personality:k.personality,scenario:k.scenario,firstMessage:k.first_mes,exampleDialogs:k.mes_example,creatorNotes:k.creator_notes,alternateGreetings:(k.alternate_greetings||[]).filter(Boolean)};}},
 
-  datacat:{name:'DataCat',icon:'🐱',color:'rgba(251,146,60,.9)',
-    sorts:[{v:'recent',label:'🆕 Recent'}],
+  datacat:{name:'DataCat',icon:'🐱',color:'rgba(251,146,60,.9)',noTags:true,
+    sorts:[{v:'recent',label:'🆕 Recent'},{v:'score',label:'🔥 Popular'}],
     async search(p){
-      const u=new URLSearchParams({limit:'40',offset:String((p.page-1)*40),min_tokens:'200'});if(p.query)u.set('q',p.query);
+      const u=new URLSearchParams({limit:'40',offset:String((p.page-1)*40),min_tokens:'200'});if(p.query)u.set('q',p.query);if(p.sort&&p.sort!=='recent')u.set('sort',p.sort);
       const j=await(await fetch('/api/storage/datacat/search?'+u,{headers:{Accept:'application/json'}})).json();
       let cs=j.characters||[];
-      if(p.inc.length){const lo=p.inc.map(t=>t.toLowerCase());cs=cs.filter(c=>(c.tags||[]).some(t=>lo.includes(String(t).toLowerCase())));}
-      if(p.exc.length){const lx=p.exc.map(t=>t.toLowerCase());cs=cs.filter(c=>!(c.tags||[]).some(t=>lx.includes(String(t).toLowerCase())));}
       return{cards:cs.map(c=>{const av=c.avatar||'';return{source:'datacat',id:c.characterId,name:c.name||c.chatName||'Unnamed',creator:c.creatorName?('by '+c.creatorName):'',avatarUrl:av.startsWith('http')?av:(av?ELLA+av:PH),tokens:c.totalTokens||c.total_tokens,stars:null,tags:c.tags||[],desc:c.description||c.rawDescription,externalUrl:'https://janitorai.com/characters/'+c.characterId};}),more:!!j.hasMore};
     },
     async detail(c){return{description:c.desc};},

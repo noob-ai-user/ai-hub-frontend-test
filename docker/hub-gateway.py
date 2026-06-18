@@ -45,6 +45,10 @@ APP_PREFIXES = {
     "marinara": "/apps/marinara",
 }
 
+# Collapses the /apps/{app}/apis/{app}/api/ artifact (see _parsed) back to
+# /apps/{app}/api/. \1 must match the same app on both sides.
+_DOUBLE_PREFIX_RE = re.compile(r"^/apps/(marinara|lumiverse)/apis/\1/api/")
+
 HUB_ONLY_PATHS = {
     "/api/hub",
     "/api/hub/",
@@ -705,7 +709,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _parsed(self) -> tuple[str, str, str]:
         parsed = urlparse(self.path)
-        return parsed.path or "/", parsed.query, self.headers.get("Referer", "")
+        path = parsed.path or "/"
+        # Repair a subpath-rewrite artifact: Marinara client helpers that strip a
+        # hardcoded "/api" (path.slice(4)) from an already subpath-prefixed literal
+        # emit e.g. /apps/marinara/apis/marinara/api/sidecar/... — collapse the
+        # duplicated prefix back to the correct /apps/marinara/api/sidecar/...
+        path = _DOUBLE_PREFIX_RE.sub(r"/apps/\1/api/", path)
+        return path, parsed.query, self.headers.get("Referer", "")
 
     def _send_bytes(self, code: int, body: bytes, content_type: str, extra_headers: dict | None = None) -> None:
         self.send_response(code)
@@ -1091,6 +1101,11 @@ class Handler(BaseHTTPRequestHandler):
                 "summary": "1",
                 "minTotalTokens": qs.get("min_tokens", ["200"])[0],
             }
+            # DataCat honours sort=score (popularity by its scorer); any other
+            # value falls back to the default recent-first ordering.
+            sort = (qs.get("sort", [""])[0] or "").strip().lower()
+            if sort in ("score", "popular", "popularity"):
+                params["sort"] = "score"
             qstr = urlencode(params)
             q = (qs.get("q", [""])[0] or qs.get("search", [""])[0]).strip()
             if q:
